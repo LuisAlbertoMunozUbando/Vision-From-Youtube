@@ -122,19 +122,24 @@ def run(cmd, timeout=None):
 
 
 def require_tools() -> None:
-    missing = [x for x in ("yt-dlp", "ffmpeg", "ffprobe") if shutil.which(x) is None]
+    missing = [x for x in ("ffmpeg", "ffprobe") if shutil.which(x) is None]
+    try:
+        import yt_dlp  # noqa: F401
+    except ImportError:
+        missing.append("yt-dlp (Python module in worker virtualenv)")
     if missing:
         raise RuntimeError(f"Missing required tools: {', '.join(missing)}")
 
 
 def yt_dlp_base() -> list[str]:
-    """Common yt-dlp flags for current YouTube JS challenge handling.
+    """Run yt-dlp from the same Python environment as this extractor.
 
-    Deno is preferred because it is the runtime recommended by yt-dlp for EJS.
-    We use an explicit path so the systemd worker does not depend on an
-    interactive-shell PATH.
+    This avoids systemd PATH mismatches where an older system-wide yt-dlp is
+    found instead of the updated package installed in the worker virtualenv.
+    Deno is referenced explicitly so JS challenge handling also works under
+    systemd's restricted environment.
     """
-    cmd = ["yt-dlp", "--ignore-config", "--no-playlist"]
+    cmd = [sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-playlist"]
     deno = Path.home() / ".deno" / "bin" / "deno"
     if deno.exists():
         cmd += ["--js-runtimes", f"deno:{deno}", "--remote-components", "ejs:github"]
