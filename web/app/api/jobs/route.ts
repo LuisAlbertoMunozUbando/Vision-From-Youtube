@@ -14,7 +14,11 @@ export async function POST(request: Request) {
     const upstream = await fetch(`${base}/v1/jobs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ youtube_url: body.youtube_url }),
+      body: JSON.stringify({
+        youtube_url: body.youtube_url,
+        email: body.email,
+        newsletter: Boolean(body.newsletter),
+      }),
       signal: AbortSignal.timeout(15_000),
       cache: 'no-store',
     });
