@@ -1,0 +1,8 @@
+# Copy to ~/.cloudflared/config.yml after creating a named tunnel.
+tunnel: YOUR_TUNNEL_UUID
+credentials-file: /home/alberto/.cloudflared/YOUR_TUNNEL_UUID.json
+
+ingress:
+  - hostname: spark-slides.example.com
+    service: http://127.0.0.1:8000
+  - service: http_status:404
