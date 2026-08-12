@@ -1,0 +1,114 @@
+    finally:
+        rd.close()
+    return seg.finish(), seg, DT
+
+
+# ---------------------------------------------------------------------------
+# Pass C + PDF
+# ---------------------------------------------------------------------------
+def _font(sz):
+    for f in _FONTS:
+        if os.path.exists(f): return ImageFont.truetype(f, sz)
+    return ImageFont.load_default()
+
+
+def add_credit(bgr, t):
+    l1 = f"© Taken from: {VIDEO_URL}"
+    l2 = f'"{VIDEO_TITLE}"  —  captured at t = {fmt_t(t)}'
+    im = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)).convert("RGBA")
+    W, H = im.size; sz = max(11, H // 55); d0 = ImageDraw.Draw(im)
+    while sz > 9 and max(d0.textlength(l1, font=_font(sz)), d0.textlength(l2, font=_font(sz))) > W - 24: sz -= 1
+    f = _font(sz); pad = max(3, sz // 3); bar = 2 * sz + 3 * pad
+    ov = Image.new("RGBA", im.size, (0,0,0,0)); ImageDraw.Draw(ov).rectangle([(0,H-bar),(W,H)], fill=(0,0,0,160))
+    im = Image.alpha_composite(im, ov); d = ImageDraw.Draw(im)
+    d.text((12,H-bar+pad), l1, font=f, fill=(255,255,255,255)); d.text((12,H-bar+pad+sz+pad), l2, font=f, fill=(215,215,215,255))
+    return cv2.cvtColor(np.array(im.convert("RGB")), cv2.COLOR_RGB2BGR)
+
+
+_LAP = None
+
+def sharpness(bgr):
+    global _LAP
+    if _LAP is None:
+        _LAP = torch.tensor([[0.,1.,0.],[1.,-4.,1.],[0.,1.,0.]], device=DEVICE).view(1,1,3,3)
+    t = torch.from_numpy(np.ascontiguousarray(bgr)).to(DEVICE).float().mean(2).unsqueeze(0).unsqueeze(0) / 255.0
+    return float(F.conv2d(t, _LAP, padding=1).var())
+
+
+def box_to_px(box, W, H):
+    x0,y0,x1,y1 = box; x0-=BOX_PAD; y0-=BOX_PAD; x1+=BOX_PAD; y1+=BOX_PAD
+    if SNAP_16_9:
+        w,h=(x1-x0)*W,(y1-y0)*H
+        if abs((w/max(h,1))-16/9)/(16/9)<0.12:
+            cy,want=(y0+y1)/2,(w/(16/9))/H; y0,y1=cy-want/2,cy+want/2
+    px0=max(0,int(round(x0*W))); py0=max(0,int(round(y0*H))); px1=min(W,int(round(x1*W))); py1=min(H,int(round(y1*H)))
+    return px0,py0,max(px1,px0+8),max(py1,py0+8)
+
+
+def capture_and_pdf(segments, seg_obj, dt):
+    torch.backends.cudnn.enabled = False
+    captures = []
+    total = max(1, len(segments))
+    for i,s in enumerate(segments):
+        lo=max(s["t_settled"]+dt,s["t_start"]); hi=max(s["t_last"],lo)
+        times=[lo] if SHARP_CANDIDATES<=1 else [lo+(hi-lo)*k/(SHARP_CANDIDATES-1) for k in range(SHARP_CANDIDATES)]
+        px0,py0,px1,py1=box_to_px(s["box"],NATIVE_W,NATIVE_H)
+        best,best_s,best_t=None,-1.0,times[0]
+        for t in times:
+            fr=grab_bgr(t)
+            if fr is None: continue
+            crop=np.ascontiguousarray(fr[py0:py1,px0:px1]); sc=sharpness(crop)
+            if sc>best_s: best,best_s,best_t=crop,sc,t
+        if best is None: continue
+        out=add_credit(best,best_t) if STAMP_CREDIT else best
+        name=f"slide_{i:03d}_{fmt_t(s['t_start']).replace(':','-')}.png"; path=OUTPUT_DIR/name
+        cv2.imwrite(str(path),out,[cv2.IMWRITE_PNG_COMPRESSION,PNG_COMPRESSION])
+        captures.append({"index":i,"file":str(path),"start":fmt_t(s["t_start"]),"end":fmt_t(s["t_last"]),
+            "start_seconds":round(s["t_start"],2),"end_seconds":round(s["t_last"],2),"duration_seconds":round(s["duration"],2),
+            "captured_at":fmt_t(best_t),"captured_at_seconds":round(best_t,2),"animation_steps":s["builds"],"sharpness":round(best_s,6),
+            "box_fractions":[round(v,4) for v in s["box"]],"crop_pixels":[px0,py0,px1,py1],"size":[px1-px0,py1-py0],
+            "credit":f'© {VIDEO_URL} — "{VIDEO_TITLE}" — t={fmt_t(best_t)}'})
+        write_status("pass_c", 76 + 18*((i+1)/total), f"Pass C: capturando slide {i+1}/{total}", slides_detected=len(captures))
+    tp,ti=seg_obj.thresholds()
+    summary={"source_url":VIDEO_URL,"title":VIDEO_TITLE,"native_resolution":[NATIVE_W,NATIVE_H],"duration_seconds":round(DURATION,1),
+        "analysis":{"fps":ANALYSIS_FPS,"resolution":[ANALYSIS_W,ANALYSIS_H],"grid":[GRID_COLS,GRID_ROWS],"static_window_sec":STATIC_WINDOW_SEC,"static_eps":STATIC_EPS,"region_mode":REGION_MODE},
+        "thresholds":{"same_diff_learned":round(tp,5),"same_ink_learned":round(ti,5),"dedup_mult":DEDUP_MULT,"min_slide_seconds":MIN_SLIDE_SECONDS,"min_slide_area":MIN_SLIDE_AREA},
+        "num_slides":len(captures),"slides":captures}
+    (OUTPUT_DIR/"slides.json").write_text(json.dumps(summary,indent=2,ensure_ascii=False),encoding="utf-8")
+    if not captures: raise RuntimeError("No slides were captured with the current detector settings.")
+    pages=[Image.open(c["file"]).convert("RGB") for c in captures]
+    pdf=OUTPUT_DIR/"slides.pdf"; pages[0].save(pdf,save_all=True,append_images=pages[1:],resolution=150)
+    for p in pages: p.close()
+    return pdf, summary
+
+
+def main():
+    global SRC, VIDEO_URL, VIDEO_TITLE, NATIVE_W, NATIVE_H, DURATION, MAX_HEIGHT, OUTPUT_DIR, WORK_DIR, STATUS_FILE
+    ap=argparse.ArgumentParser()
+    ap.add_argument("--url",required=True)
+    ap.add_argument("--job-dir",required=True)
+    ap.add_argument("--status-file",required=True)
+    ap.add_argument("--max-height",type=int,default=1080)
+    args=ap.parse_args()
+    job_dir=Path(args.job_dir).resolve(); WORK_DIR=job_dir/"work"; OUTPUT_DIR=job_dir/"output"; STATUS_FILE=Path(args.status_file).resolve()
+    WORK_DIR.mkdir(parents=True,exist_ok=True); OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
+    VIDEO_URL=args.url; MAX_HEIGHT=args.max_height
+    try:
+        write_status("starting",1,"Preparando entorno")
+        require_tools(); init_gpu()
+        SRC,info=download_source(VIDEO_URL,WORK_DIR,MAX_HEIGHT); VIDEO_TITLE=info.get("title") or "YouTube video"
+        NATIVE_W,NATIVE_H,DURATION=probe_source(SRC)
+        write_status("probe",10,f"Video listo: {VIDEO_TITLE}",title=VIDEO_TITLE,duration_seconds=DURATION,native_resolution=[NATIVE_W,NATIVE_H])
+        choose_decoder(); build_content_mask()
+        segments,seg_obj,dt=analyze(); segments,_=enforce_layout(segments)
+        write_status("pass_c",76,f"{len(segments)} slides distintos detectados; capturando a resolución nativa",slides_detected=len(segments))
+        pdf,summary=capture_and_pdf(segments,seg_obj,dt)
+        write_status("complete_local",95,"PDF generado localmente",slides_detected=summary["num_slides"],pdf_path=str(pdf),title=VIDEO_TITLE)
+        print(json.dumps({"pdf_path":str(pdf),"slides_json":str(OUTPUT_DIR/"slides.json"),"num_slides":summary["num_slides"],"title":VIDEO_TITLE},ensure_ascii=False))
+    except Exception as e:
+        write_status("failed",100,str(e))
+        raise
+
+
+if __name__ == "__main__":
+    main()
