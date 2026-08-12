@@ -15,6 +15,25 @@ type Job = {
   error?: string | null;
 };
 
+function readableError(body: any, fallback: string): string {
+  const value = body?.error ?? body?.detail ?? body?.message;
+  if (!value) return fallback;
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item?.msg) {
+          const where = Array.isArray(item.loc) ? item.loc.filter((x: unknown) => x !== 'body').join('.') : '';
+          return where ? `${where}: ${item.msg}` : item.msg;
+        }
+        try { return JSON.stringify(item); } catch { return String(item); }
+      })
+      .join(' · ');
+  }
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
+
 export default function Home() {
   const [url, setUrl] = useState('');
   const [email, setEmail] = useState('');
@@ -39,7 +58,7 @@ export default function Home() {
         }),
       });
       const body = await r.json();
-      if (!r.ok) throw new Error(body.error || body.detail || 'No fue posible crear el trabajo');
+      if (!r.ok) throw new Error(readableError(body, 'No fue posible crear el trabajo'));
       setJob(body);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error inesperado');
@@ -54,7 +73,7 @@ export default function Home() {
       try {
         const r = await fetch(`/api/jobs/${job.id}`, { cache: 'no-store' });
         const body = await r.json();
-        if (!r.ok) throw new Error(body.error || body.detail || 'No se pudo consultar el estado');
+        if (!r.ok) throw new Error(readableError(body, 'No se pudo consultar el estado'));
         setJob(body);
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Error consultando la Spark');
