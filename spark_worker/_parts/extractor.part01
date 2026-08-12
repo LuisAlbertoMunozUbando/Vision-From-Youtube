@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""
+YouTube -> Slides extractor for NVIDIA DGX Spark (GB10).
+
+Adapted from Prof. Alberto Muñoz's Jupyter notebook. The scientific pipeline is
+kept intact: local download, Pass A content-mask discovery, Pass B GPU/NVDEC
+segmentation, Pass C native-resolution sharpest-frame capture, provenance stamp,
+metadata JSON, and PDF assembly.
+
+This file is intentionally independent from FastAPI so every extraction runs in
+an isolated subprocess. It writes machine-readable progress to --status-file.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import shutil
+import subprocess
+import sys
+import time
+from collections import deque
+from pathlib import Path
+from typing import Optional
+
+import cv2
+import numpy as np
+import torch
+import torch.nn.functional as F
+from PIL import Image, ImageDraw, ImageFont
+
+# ---------------------------------------------------------------------------
+# Configuration: defaults are taken from the supplied notebook.
+# ---------------------------------------------------------------------------
+ANALYSIS_FPS = 2.0
+ANALYSIS_W = 640
+ANALYSIS_H = 360
+BATCH_FRAMES = 64
+GRID_COLS = 64
+GRID_ROWS = 36
+
+STATIC_WINDOW_SEC = 2.0
+STATIC_EPS = 0.020
+MIN_SLIDE_AREA = 0.15
+MIN_FILL_RATIO = 0.55
+MIN_DETAIL = 0.015
+ASPECT_RANGE = (0.6, 3.2)
+MIN_STABLE_SEC = 2.0
+MIN_SLIDE_SECONDS = 6.0
+
+PIX_EPS = 0.10
+SAME_DIFF = 0.020
+SAME_INK = 0.060
+ADAPT_NOISE = True
+NOISE_MULT = 6.0
+NOISE_WINDOW = 120
+BUILD_DIFF = 0.35
+MERGE_BUILDS = True
+DEDUP_MULT = 1.6
+
+REGION_MODE = "auto"
+MANUAL_REGION = (0.26, 0.08, 0.99, 0.86)
+CONTENT_REL = 0.30
+CONTENT_ABS = 0.010
+CONTENT_CLOSE = 5
+EXPAND_MARGINS = True
+CONSISTENT_LAYOUT = True
+LAYOUT_IOU = 0.70
+BOX_PAD = 0.010
+SNAP_16_9 = True
+
+SHARP_CANDIDATES = 3
+STAMP_CREDIT = True
+PNG_COMPRESSION = 3
+USE_NVDEC = True
+REQUIRE_GPU = True
+SIG_W, SIG_H, SIG_BLUR = 128, 72, 3
+_FONTS = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+]
+
+DEVICE = "cpu"
+DECODER = None
+CONTENT = None
+SRC = ""
+VIDEO_URL = ""
+VIDEO_TITLE = "YouTube video"
+NATIVE_W = 0
+NATIVE_H = 0
+DURATION = 0.0
+MAX_HEIGHT = 1080
+OUTPUT_DIR = Path("slides_out")
+WORK_DIR = Path("slide_work")
+STATUS_FILE: Optional[Path] = None
+
+
+def fmt_t(sec: float) -> str:
+    h, r = divmod(int(sec), 3600)
+    m, s = divmod(r, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def write_status(stage: str, progress: float, message: str, **extra) -> None:
+    if STATUS_FILE is None:
+        return
+    payload = {
+        "stage": stage,
+        "progress": max(0.0, min(float(progress), 100.0)),
+        "message": message,
+        "updated_at": time.time(),
+        **extra,
+    }
+    tmp = STATUS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(STATUS_FILE)
+
+
+def run(cmd, timeout=None):
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+def require_tools() -> None:
+    missing = [x for x in ("yt-dlp", "ffmpeg", "ffprobe") if shutil.which(x) is None]
+    if missing:
+        raise RuntimeError(f"Missing required tools: {', '.join(missing)}")
+
+
+def init_gpu() -> None:
+    global DEVICE
+    if torch.cuda.is_available():
+        DEVICE = "cuda"
+        torch.cuda.set_device(0)
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
+        p = torch.cuda.get_device_properties(0)
+        print(f"CUDA: {p.name} | cc {p.major}.{p.minor} | torch {torch.__version__} / CUDA {torch.version.cuda}")
+    elif REQUIRE_GPU:
+        raise RuntimeError("CUDA is not available to PyTorch. Check nvidia-smi and the CUDA build of torch.")
+    else:
+        DEVICE = "cpu"
+
+
+def get_video_metadata(url: str, max_minutes: int) -> dict:
+    """Read public metadata before downloading so oversized/live inputs fail early."""
+    cmd = [
+        "yt-dlp", "--no-playlist", "--skip-download", "--no-warnings",
+        "--dump-single-json", url,
+    ]
+    r = run(cmd, timeout=120)
+    if r.returncode != 0:
+        raise RuntimeError(f"yt-dlp could not read the video metadata: {r.stderr[-600:]}")
+    info = json.loads(r.stdout)
+    duration = float(info.get("duration") or 0)
+    if info.get("is_live") or info.get("live_status") in {"is_live", "post_live"}:
+        raise RuntimeError("Live streams are not accepted by the web service. Record them first, then process the file locally.")
+    if max_minutes > 0 and duration > max_minutes * 60:
+        raise RuntimeError(f"Video is {duration/60:.1f} min; service limit is {max_minutes} min.")
+    return info
+
+
+def download_source(url: str, work_dir: Path, max_height: int) -> tuple[str, dict]:
+    info = get_video_metadata(url, int(os.getenv("MAX_VIDEO_MINUTES", "180")))
+    fmt = f"bv*[height<={max_height}]/b[height<={max_height}]/bv*/b"
+    out_tpl = str(work_dir / "source.%(ext)s")
+    cmd = [
+        "yt-dlp", "--no-playlist", "-f", fmt, "--no-warnings",
+        "--write-info-json", "-o", out_tpl, url,
+    ]
+    write_status("download", 3, "Descargando video de YouTube", title=info.get("title"))
+    r = subprocess.run(cmd)
+    if r.returncode != 0:
+        raise RuntimeError("yt-dlp failed to download the source video.")
+    for ext in ("mp4", "mkv", "webm"):
+        cand = work_dir / f"source.{ext}"
+        if cand.exists():
+            return str(cand), info
+    # Fallback for unusual extension chosen by yt-dlp.
+    candidates = [p for p in work_dir.glob("source.*") if not p.name.endswith(".json") and p.is_file()]
+    if not candidates:
+        raise RuntimeError("Download finished but no source video was found.")
+    return str(candidates[0]), info
+
+
+def probe_source(src: str) -> tuple[int, int, float]:
+    pr = run([
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height,avg_frame_rate:format=duration",
+        "-of", "json", src,
+    ], timeout=120)
+    if pr.returncode != 0:
+        raise RuntimeError(f"ffprobe failed: {pr.stderr[-500:]}")
+    meta = json.loads(pr.stdout)
+    st = meta["streams"][0]
+    return int(st["width"]), int(st["height"]), float(meta["format"].get("duration") or 0)
+
+
+# ---------------------------------------------------------------------------
+# Decoder (notebook cell 4)
+# ---------------------------------------------------------------------------
+def _decoder_variants():
+    v = []
+    if USE_NVDEC and DEVICE == "cuda":
+        v.append(("nvdec+scale_cuda",
+                  ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
+                  "scale_cuda={w}:{h}:format=nv12,hwdownload,format=nv12", "nv12"))
+        v.append(("nvdec+cpu-scale", ["-hwaccel", "cuda"],
+                  "scale={w}:{h}:flags=area", "gray"))
+    v.append(("cpu", [], "scale={w}:{h}:flags=area", "gray"))
+    return v
+
+
+def _build_cmd(variant, src, w, h, fps=None, seek=None, dur=None, keyframes=False):
+    name, hw, vf, pix = variant
