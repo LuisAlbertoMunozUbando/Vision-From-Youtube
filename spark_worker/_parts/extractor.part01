@@ -144,9 +144,10 @@ def init_gpu() -> None:
 
 
 def get_video_metadata(url: str, max_minutes: int) -> dict:
-    """Read public metadata before downloading so oversized/live inputs fail early."""
+    """Read public metadata without relying on yt-dlp's default format choice."""
     cmd = [
         "yt-dlp", "--ignore-config", "--no-playlist", "--skip-download", "--no-warnings",
+        "--no-check-formats", "--ignore-no-formats-error", "-f", "all",
         "--dump-single-json", url,
     ]
     r = run(cmd, timeout=120)
