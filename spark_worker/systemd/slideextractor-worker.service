@@ -1,0 +1,16 @@
+[Unit]
+Description=SlideExtractor DGX Spark Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=alberto
+WorkingDirectory=/home/alberto/slideextractor/spark_worker
+EnvironmentFile=/home/alberto/slideextractor/spark_worker/.env
+ExecStart=/home/alberto/slideextractor/.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000 --workers 1
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
