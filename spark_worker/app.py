@@ -17,8 +17,8 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from vercel.blob import BlobClient
 
 BASE_DIR = Path(__file__).resolve().parent
 JOBS_DIR = Path(os.getenv("JOBS_DIR", BASE_DIR / "jobs")).resolve()
@@ -26,10 +26,9 @@ JOBS_DIR.mkdir(parents=True, exist_ok=True)
 API_KEY = os.getenv("SLIDEEXTRACTOR_API_KEY", "")
 MAX_QUEUE = int(os.getenv("MAX_QUEUE", "8"))
 MAX_HEIGHT = int(os.getenv("MAX_HEIGHT", "1080"))
-KEEP_LOCAL_RESULTS = os.getenv("KEEP_LOCAL_RESULTS", "0") == "1"
-BLOB_ACCESS = os.getenv("BLOB_ACCESS", "public")
+KEEP_LOCAL_RESULTS = os.getenv("KEEP_LOCAL_RESULTS", "1") == "1"
 
-app = FastAPI(title="SlideExtractor Spark Worker", version="1.0.0")
+app = FastAPI(title="SlideExtractor Spark Worker", version="1.1.0")
 job_queue: queue.Queue[str] = queue.Queue(maxsize=MAX_QUEUE)
 
 
@@ -112,18 +111,6 @@ def merged_state(job_id: str) -> dict:
     return state
 
 
-def upload_pdf(job_id: str, pdf_path: Path) -> str:
-    if not os.getenv("BLOB_READ_WRITE_TOKEN"):
-        raise RuntimeError("BLOB_READ_WRITE_TOKEN is not configured on Spark")
-    client = BlobClient()
-    random_part = secrets.token_urlsafe(16).replace("/", "_")
-    pathname = f"slideextractor/{job_id}/{random_part}-slides.pdf"
-    blob = client.put(pathname, pdf_path.read_bytes(), access=BLOB_ACCESS, add_random_suffix=False)
-    if isinstance(blob, dict):
-        return blob.get("downloadUrl") or blob.get("download_url") or blob.get("url")
-    return getattr(blob, "download_url", None) or getattr(blob, "downloadUrl", None) or getattr(blob, "url")
-
-
 def run_job(job_id: str):
     state = load_state(job_id)
     state.update(status="running", progress=1, stage="starting", message="Trabajo iniciado en DGX Spark")
@@ -153,18 +140,18 @@ def run_job(job_id: str):
         if not local_pdf.exists() or not meta_file.exists():
             raise RuntimeError("Extraction completed but expected PDF/metadata are missing")
         meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        state.update(progress=96, stage="upload", message="Subiendo PDF final a Vercel Blob",
-                     title=meta.get("title"), slides=meta.get("num_slides"))
+        state.update(
+            status="done", progress=100, stage="done", message="PDF listo para descargar",
+            title=meta.get("title"), slides=meta.get("num_slides"),
+            result_url=f"/v1/jobs/{job_id}/pdf", error=None,
+        )
         save_state(job_id, state)
-        url = upload_pdf(job_id, local_pdf)
-        state.update(status="done", progress=100, stage="done", message="PDF listo",
-                     title=meta.get("title"), slides=meta.get("num_slides"), result_url=url, error=None)
-        save_state(job_id, state)
+        # Keep slides.pdf for the authenticated download endpoint. We can still
+        # discard the large source/work directory when local retention is off.
         if not KEEP_LOCAL_RESULTS:
             shutil.rmtree(jd / "work", ignore_errors=True)
             for p in (jd / "output").glob("*.png"):
                 p.unlink(missing_ok=True)
-            local_pdf.unlink(missing_ok=True)
     except Exception as e:
         state.update(status="failed", progress=100, stage="failed", message="Error", error=str(e))
         save_state(job_id, state)
@@ -224,3 +211,19 @@ def get_job(job_id: str):
     if not re.fullmatch(r"[0-9a-f]{32}", job_id):
         raise HTTPException(400, "Invalid job id")
     return JobResponse(**merged_state(job_id))
+
+
+@app.get("/v1/jobs/{job_id}/pdf", dependencies=[Depends(require_api_key)])
+def download_job_pdf(job_id: str):
+    if not re.fullmatch(r"[0-9a-f]{32}", job_id):
+        raise HTTPException(400, "Invalid job id")
+    state = load_state(job_id)
+    pdf = job_dir(job_id) / "output" / "slides.pdf"
+    if state.get("status") != "done" or not pdf.exists():
+        raise HTTPException(404, "PDF is not ready")
+    return FileResponse(
+        path=str(pdf),
+        media_type="application/pdf",
+        filename=f"slides-{job_id[:8]}.pdf",
+        headers={"Cache-Control": "private, no-store"},
+    )
