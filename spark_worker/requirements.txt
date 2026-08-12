@@ -1,0 +1,8 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+pydantic>=2.10,<3
+numpy>=2.0,<3
+opencv-python-headless>=4.10,<5
+pillow>=11,<12
+yt-dlp>=2026.1.1
+vercel>=0.3
