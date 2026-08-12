@@ -98,8 +98,8 @@ export default function Home() {
             <div className="progress"><div style={{ width: `${job.progress || 0}%` }} /></div>
             <p>{job.message || job.stage || 'En cola'}</p>
             {typeof job.slides === 'number' && <p><b>{job.slides}</b> slides detectados.</p>}
-            {job.status === 'done' && job.result_url && (
-              <a className="download" href={job.result_url}>Descargar PDF</a>
+            {job.status === 'done' && (
+              <a className="download" href={`/api/jobs/${job.id}/download`}>Descargar PDF</a>
             )}
             {job.status === 'failed' && <div className="error">{job.error || 'El trabajo falló.'}</div>}
           </section>
