@@ -8,12 +8,16 @@ h1 { margin:10px 0 12px; font-size:clamp(52px, 9vw, 96px); line-height:.93; lett
 .lede { width:min(800px,100%); font-size:clamp(18px,2.3vw,25px); line-height:1.5; color:#c7d0da; margin:0 0 34px; }
 .card { border:1px solid var(--line); background:color-mix(in srgb, var(--panel) 92%, transparent); border-radius:20px; padding:22px; box-shadow:0 18px 60px rgba(0,0,0,.23); }
 .form label { display:block; font-weight:700; margin-bottom:10px; }
+.fieldLabel { margin-top:18px; }
 .row { display:flex; gap:10px; }
-input { flex:1; min-width:0; border:1px solid #344154; background:#090e15; color:var(--fg); border-radius:12px; padding:15px 16px; font-size:16px; outline:none; }
-input:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(117,230,164,.12); }
+input[type="url"],input[type="email"] { width:100%; border:1px solid #344154; background:#090e15; color:var(--fg); border-radius:12px; padding:15px 16px; font-size:16px; outline:none; }
+input[type="url"]:focus,input[type="email"]:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(117,230,164,.12); }
+.checkRow { display:flex !important; align-items:flex-start; gap:10px; margin:18px 0 0 !important; color:#c7d0da; font-weight:500 !important; line-height:1.4; }
+.checkRow input { margin-top:3px; width:17px; height:17px; accent-color:var(--accent); flex:0 0 auto; }
+.submitButton { margin-top:18px; }
 button,.download { border:0; border-radius:12px; padding:15px 20px; background:var(--accent); color:#05120a; font-weight:850; font-size:15px; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; }
 button:disabled { opacity:.45; cursor:not-allowed; }
-small { display:block; color:var(--muted); margin-top:10px; }
+small { display:block; color:var(--muted); margin-top:10px; line-height:1.45; }
 .status { margin-top:18px; }
 .statusHeader { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; }
 .status h2 { font-size:21px; margin:10px 0 0; }
@@ -23,6 +27,7 @@ small { display:block; color:var(--muted); margin-top:10px; }
 .progress { height:8px; background:#080c12; border-radius:999px; overflow:hidden; margin:18px 0; }
 .progress > div { height:100%; background:var(--accent); transition:width .4s ease; }
 .download { margin-top:8px; }
+.deliveryNote { color:var(--muted); font-size:14px; }
 .error { margin-top:14px; padding:14px 16px; border:1px solid #713844; background:#35151b; color:#ffc3ca; border-radius:12px; }
 .features { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:18px; }
 .features article { border-top:1px solid var(--line); padding:18px 4px; display:flex; flex-direction:column; gap:5px; }
