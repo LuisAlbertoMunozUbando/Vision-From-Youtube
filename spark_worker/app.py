@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import base64
 import json
 import os
 import queue
@@ -11,6 +12,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -27,13 +30,17 @@ API_KEY = os.getenv("SLIDEEXTRACTOR_API_KEY", "")
 MAX_QUEUE = int(os.getenv("MAX_QUEUE", "8"))
 MAX_HEIGHT = int(os.getenv("MAX_HEIGHT", "1080"))
 KEEP_LOCAL_RESULTS = os.getenv("KEEP_LOCAL_RESULTS", "1") == "1"
+DRIVE_BRIDGE_URL = os.getenv("DRIVE_BRIDGE_URL", "").strip()
+DRIVE_BRIDGE_SECRET = os.getenv("DRIVE_BRIDGE_SECRET", "").strip()
 
-app = FastAPI(title="SlideExtractor Spark Worker", version="1.1.0")
+app = FastAPI(title="SlideExtractor Spark Worker", version="1.2.0")
 job_queue: queue.Queue[str] = queue.Queue(maxsize=MAX_QUEUE)
 
 
 class JobRequest(BaseModel):
     youtube_url: str = Field(min_length=10, max_length=500)
+    email: str = Field(min_length=5, max_length=254)
+    newsletter: bool = False
 
 
 class JobResponse(BaseModel):
@@ -45,6 +52,7 @@ class JobResponse(BaseModel):
     title: Optional[str] = None
     slides: Optional[int] = None
     result_url: Optional[str] = None
+    email: Optional[str] = None
     error: Optional[str] = None
     created_at: float
     updated_at: float
@@ -65,6 +73,10 @@ def valid_youtube_url(url: str) -> bool:
         return False
     host = (p.hostname or "").lower().removeprefix("www.")
     return p.scheme == "https" and host in {"youtube.com", "m.youtube.com", "youtu.be"}
+
+
+def valid_email(email: str) -> bool:
+    return re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email.strip()) is not None
 
 
 def job_dir(job_id: str) -> Path:
@@ -111,6 +123,42 @@ def merged_state(job_id: str) -> dict:
     return state
 
 
+def publish_to_drive(job_id: str, state: dict, pdf_path: Path, meta: dict) -> str:
+    if not DRIVE_BRIDGE_URL or not DRIVE_BRIDGE_SECRET:
+        raise RuntimeError("DRIVE_BRIDGE_URL/DRIVE_BRIDGE_SECRET are not configured on Spark")
+
+    payload = {
+        "secret": DRIVE_BRIDGE_SECRET,
+        "job_id": job_id,
+        "email": state["email"],
+        "newsletter": bool(state.get("newsletter")),
+        "youtube_url": state["youtube_url"],
+        "title": meta.get("title") or "YouTube Slides",
+        "slides": int(meta.get("num_slides") or 0),
+        "filename": f"slides-{job_id[:8]}.pdf",
+        "pdf_base64": base64.b64encode(pdf_path.read_bytes()).decode("ascii"),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        DRIVE_BRIDGE_URL,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=240) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")[-1000:]
+        raise RuntimeError(f"Google Drive bridge returned HTTP {e.code}: {detail}") from e
+    except Exception as e:
+        raise RuntimeError(f"Google Drive bridge failed: {e}") from e
+
+    if not result.get("ok") or not result.get("url"):
+        raise RuntimeError(f"Google Drive bridge error: {result.get('error') or result}")
+    return str(result["url"])
+
+
 def run_job(job_id: str):
     state = load_state(job_id)
     state.update(status="running", progress=1, stage="starting", message="Trabajo iniciado en DGX Spark")
@@ -135,19 +183,35 @@ def run_job(job_id: str):
             except Exception:
                 pass
             raise RuntimeError(live.get("message") or f"Extractor exited with code {proc.returncode}. See {log_path}")
+
         local_pdf = jd / "output" / "slides.pdf"
         meta_file = jd / "output" / "slides.json"
         if not local_pdf.exists() or not meta_file.exists():
             raise RuntimeError("Extraction completed but expected PDF/metadata are missing")
+
         meta = json.loads(meta_file.read_text(encoding="utf-8"))
         state.update(
-            status="done", progress=100, stage="done", message="PDF listo para descargar",
-            title=meta.get("title"), slides=meta.get("num_slides"),
-            result_url=f"/v1/jobs/{job_id}/pdf", error=None,
+            progress=96,
+            stage="drive",
+            message="Publicando PDF en Google Drive y enviando email",
+            title=meta.get("title"),
+            slides=meta.get("num_slides"),
         )
         save_state(job_id, state)
-        # Keep slides.pdf for the authenticated download endpoint. We can still
-        # discard the large source/work directory when local retention is off.
+
+        drive_url = publish_to_drive(job_id, state, local_pdf, meta)
+        state.update(
+            status="done",
+            progress=100,
+            stage="done",
+            message="PDF listo en Google Drive; enlace enviado por email",
+            title=meta.get("title"),
+            slides=meta.get("num_slides"),
+            result_url=drive_url,
+            error=None,
+        )
+        save_state(job_id, state)
+
         if not KEEP_LOCAL_RESULTS:
             shutil.rmtree(jd / "work", ignore_errors=True)
             for p in (jd / "output").glob("*.png"):
@@ -192,15 +256,31 @@ def health():
 @app.post("/v1/jobs", response_model=JobResponse, dependencies=[Depends(require_api_key)])
 def create_job(req: JobRequest):
     url = req.youtube_url.strip()
+    email = req.email.strip().lower()
     if not valid_youtube_url(url):
         raise HTTPException(400, "Only https://youtube.com and https://youtu.be URLs are accepted")
+    if not valid_email(email):
+        raise HTTPException(400, "A valid email address is required")
     if job_queue.full():
         raise HTTPException(429, "Spark queue is full; try again later")
     jid = uuid.uuid4().hex
     now = time.time()
-    st = {"id": jid, "youtube_url": url, "status": "queued", "progress": 0,
-          "stage": "queued", "message": "En cola", "title": None, "slides": None,
-          "result_url": None, "error": None, "created_at": now, "updated_at": now}
+    st = {
+        "id": jid,
+        "youtube_url": url,
+        "email": email,
+        "newsletter": bool(req.newsletter),
+        "status": "queued",
+        "progress": 0,
+        "stage": "queued",
+        "message": "En cola",
+        "title": None,
+        "slides": None,
+        "result_url": None,
+        "error": None,
+        "created_at": now,
+        "updated_at": now,
+    }
     save_state(jid, st)
     job_queue.put_nowait(jid)
     return JobResponse(**st)
