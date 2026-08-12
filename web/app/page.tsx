@@ -1,5 +1,6 @@
 'use client';
 
+// Deployment sync marker: GitHub-connected production.
 import { FormEvent, useEffect, useState } from 'react';
 
 type Job = {
