@@ -127,6 +127,20 @@ def require_tools() -> None:
         raise RuntimeError(f"Missing required tools: {', '.join(missing)}")
 
 
+def yt_dlp_base() -> list[str]:
+    """Common yt-dlp flags for current YouTube JS challenge handling.
+
+    Deno is preferred because it is the runtime recommended by yt-dlp for EJS.
+    We use an explicit path so the systemd worker does not depend on an
+    interactive-shell PATH.
+    """
+    cmd = ["yt-dlp", "--ignore-config", "--no-playlist"]
+    deno = Path.home() / ".deno" / "bin" / "deno"
+    if deno.exists():
+        cmd += ["--js-runtimes", f"deno:{deno}", "--remote-components", "ejs:github"]
+    return cmd
+
+
 def init_gpu() -> None:
     global DEVICE
     if torch.cuda.is_available():
@@ -145,8 +159,8 @@ def init_gpu() -> None:
 
 def get_video_metadata(url: str, max_minutes: int) -> dict:
     """Read public metadata without relying on yt-dlp's default format choice."""
-    cmd = [
-        "yt-dlp", "--ignore-config", "--no-playlist", "--skip-download", "--no-warnings",
+    cmd = yt_dlp_base() + [
+        "--skip-download", "--no-warnings",
         "--no-check-formats", "--ignore-no-formats-error", "-f", "all",
         "--dump-single-json", url,
     ]
@@ -169,9 +183,9 @@ def download_source(url: str, work_dir: Path, max_height: int) -> tuple[str, dic
     # streams and videos whose available representations do not match 1080p.
     fmt = f"bv*[height<={max_height}]+ba/b[height<={max_height}]/bv*+ba/b"
     out_tpl = str(work_dir / "source.%(ext)s")
-    cmd = [
-        "yt-dlp", "--ignore-config", "--no-playlist", "-f", fmt, "--no-warnings",
-        "--merge-output-format", "mkv", "--write-info-json", "-o", out_tpl, url,
+    cmd = yt_dlp_base() + [
+        "-f", fmt, "--no-warnings", "--merge-output-format", "mkv",
+        "--write-info-json", "-o", out_tpl, url,
     ]
     write_status("download", 3, "Descargando video de YouTube", title=info.get("title"))
     r = subprocess.run(cmd)
@@ -181,7 +195,6 @@ def download_source(url: str, work_dir: Path, max_height: int) -> tuple[str, dic
         cand = work_dir / f"source.{ext}"
         if cand.exists():
             return str(cand), info
-    # Fallback for unusual extension chosen by yt-dlp.
     candidates = [p for p in work_dir.glob("source.*") if not p.name.endswith(".json") and p.is_file()]
     if not candidates:
         raise RuntimeError("Download finished but no source video was found.")
