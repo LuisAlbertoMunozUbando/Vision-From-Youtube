@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Local jobs/results
+spark_worker/jobs/
+
+# Secrets
+spark_worker/.env
+web/.env.local
+.env
+.env.local
+
+# Next.js / Vercel
+web/node_modules/
+web/.next/
+web/.vercel/
+
+# OS
+.DS_Store
