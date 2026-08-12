@@ -1,0 +1,198 @@
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
+    hw = list(hw)
+    if keyframes:
+        cmd += ["-skip_frame", "nokey"]
+        hw = []
+    if seek:
+        cmd += ["-ss", f"{seek:.3f}"]
+    cmd += hw + ["-i", src]
+    if dur:
+        cmd += ["-t", f"{dur:.3f}"]
+    chain = []
+    if fps and not keyframes:
+        chain.append(f"fps={fps}")
+    if keyframes:
+        chain.append(f"scale={w}:{h}:flags=area")
+        pix = "gray"
+        cmd += ["-fps_mode", "passthrough"]
+    else:
+        chain.append(vf.format(w=w, h=h))
+    cmd += ["-an", "-sn", "-vf", ",".join(chain), "-f", "rawvideo", "-pix_fmt", pix, "pipe:1"]
+    return cmd, pix
+
+
+class GrayReader:
+    def __init__(self, src, w, h, fps=None, seek=None, dur=None, keyframes=False, variant=None):
+        self.w, self.h = w, h
+        self.variant = variant or DECODER
+        self.cmd, self.pix = _build_cmd(self.variant, src, w, h, fps, seek, dur, keyframes)
+        self.fsz = w * h * 3 // 2 if self.pix == "nv12" else w * h
+        self.proc = subprocess.Popen(self.cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=10**8)
+
+    def read_batch(self, n):
+        raw = self.proc.stdout.read(self.fsz * n)
+        got = len(raw) // self.fsz
+        if got == 0:
+            return None
+        a = np.frombuffer(raw[:got * self.fsz], np.uint8)
+        if self.pix == "nv12":
+            a = a.reshape(got, self.h * 3 // 2, self.w)[:, :self.h, :]
+        else:
+            a = a.reshape(got, self.h, self.w)
+        return np.ascontiguousarray(a)
+
+    def close(self):
+        try:
+            self.proc.stdout.close()
+            self.proc.kill()
+        except Exception:
+            pass
+
+
+def choose_decoder():
+    global DECODER
+    for cand in _decoder_variants():
+        try:
+            r = GrayReader(SRC, ANALYSIS_W, ANALYSIS_H, fps=1.0, dur=4.0, variant=cand)
+            b = r.read_batch(2)
+            r.close()
+            if b is not None and b.shape[0] >= 1 and b.std() > 0:
+                DECODER = cand
+                print(f"decoder: {cand[0]}")
+                return
+        except Exception as e:
+            print(f"decoder candidate {cand[0]} failed: {e}")
+    raise RuntimeError("No working ffmpeg decode path. Check `ffmpeg -hwaccels`.")
+
+
+def grab_bgr(t, w=None, h=None):
+    w = w or NATIVE_W
+    h = h or NATIVE_H
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", f"{max(t,0):.3f}",
+           "-i", SRC, "-frames:v", "1", "-an", "-sn", "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"]
+    out = subprocess.run(cmd, capture_output=True, timeout=180).stdout
+    need = w * h * 3
+    if len(out) < need:
+        return None
+    return np.frombuffer(out[:need], np.uint8).reshape(h, w, 3)
+
+
+# ---------------------------------------------------------------------------
+# Detection core (notebook cell 5)
+# ---------------------------------------------------------------------------
+@torch.no_grad()
+def cell_stats(x, rows=None, cols=None):
+    rows = rows or GRID_ROWS
+    cols = cols or GRID_COLS
+    m = F.adaptive_avg_pool2d(x, (rows, cols))
+    m2 = F.adaptive_avg_pool2d(x * x, (rows, cols))
+    d = (m2 - m * m).clamp_min(0).sqrt()
+    return m[:, 0], d[:, 0]
+
+
+@torch.no_grad()
+def to_gpu(batch_u8):
+    t = torch.from_numpy(batch_u8)
+    if DEVICE == "cuda":
+        t = t.pin_memory().to(DEVICE, non_blocking=True)
+    return t.unsqueeze(1).float().div_(255.0)
+
+
+@torch.no_grad()
+def rolling_static(means, carry, K, eps):
+    if carry is None or carry.shape[0] == 0:
+        carry = means[:1].repeat(K - 1, 1, 1)
+    cat = torch.cat([carry, means], 0)
+    win = cat.unfold(0, K, 1)
+    return (win.amax(-1) - win.amin(-1)) <= eps, cat[-(K - 1):]
+
+
+def close_and_fill(mask_u8, k=5):
+    m = (mask_u8 > 0).astype(np.uint8)
+    if k > 1:
+        m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+    pad = cv2.copyMakeBorder(m, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+    ff = pad.copy()
+    cv2.floodFill(ff, np.zeros((pad.shape[0] + 2, pad.shape[1] + 2), np.uint8), (0, 0), 1)
+    return (pad | (ff == 0).astype(np.uint8))[1:-1, 1:-1]
+
+
+def largest_block(mask_np, detail_np=None):
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(mask_np, connectivity=4)
+    if n <= 1:
+        return None
+    i = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    a = int(stats[i, cv2.CC_STAT_AREA])
+    x, y, w, h = (int(stats[i, k]) for k in (0, 1, 2, 3))
+    det = float(detail_np[lab == i].mean()) if detail_np is not None else 1.0
+    return a, (x, y, x + w, y + h), a / float(w * h), det
+
+
+def expand_box(box, static_np, means_np, tol=0.06, max_grow=0.25, min_still=0.9):
+    x0, y0, x1, y1 = box
+    R, C = static_np.shape
+    bg = float(np.median(means_np[y0:y1, x0:x1]))
+    ok = lambda still, vals: (still.mean() >= min_still and abs(float(np.median(vals)) - bg) <= tol)
+    for _ in range(int(max_grow * C)):
+        if x0 > 0 and ok(static_np[y0:y1, x0-1], means_np[y0:y1, x0-1]): x0 -= 1
+        else: break
+    for _ in range(int(max_grow * C)):
+        if x1 < C and ok(static_np[y0:y1, x1], means_np[y0:y1, x1]): x1 += 1
+        else: break
+    for _ in range(int(max_grow * R)):
+        if y0 > 0 and ok(static_np[y0-1, x0:x1], means_np[y0-1, x0:x1]): y0 -= 1
+        else: break
+    for _ in range(int(max_grow * R)):
+        if y1 < R and ok(static_np[y1, x0:x1], means_np[y1, x0:x1]): y1 += 1
+        else: break
+    return x0, y0, x1, y1
+
+
+@torch.no_grad()
+def signature(gray_1hw, box_frac):
+    _, H, W = gray_1hw.shape
+    x0 = max(0, min(int(box_frac[0] * W), W - 2)); x1 = max(x0 + 2, min(int(box_frac[2] * W), W))
+    y0 = max(0, min(int(box_frac[1] * H), H - 2)); y1 = max(y0 + 2, min(int(box_frac[3] * H), H))
+    crop = gray_1hw[:, y0:y1, x0:x1].unsqueeze(0).float()
+    sig = F.interpolate(crop, size=(SIG_H, SIG_W), mode="area")
+    if SIG_BLUR > 1:
+        sig = F.avg_pool2d(sig, SIG_BLUR, 1, SIG_BLUR // 2)
+    return sig[0, 0].cpu().numpy()
+
+
+def ink_mask(a, rel=0.12):
+    return a < (float(np.median(a)) - rel)
+
+
+def sig_diff(a, b, pix_eps=None):
+    pix_eps = PIX_EPS if pix_eps is None else pix_eps
+    if a is None or b is None:
+        return 1.0, 1.0
+    d_pix = float((np.abs(a - b) > pix_eps).mean())
+    A, B = ink_mask(a), ink_mask(b)
+    u = int((A | B).sum())
+    return d_pix, (float((A ^ B).sum()) / u if u else 0.0)
+
+
+def is_build(prev, cur, keep=0.90, min_add=0.002):
+    A, B = ink_mask(prev), ink_mask(cur)
+    na = int(A.sum())
+    if na < 20:
+        return False
+    return (float((A & B).sum()) / na >= keep and float((B & ~A).sum()) / A.size >= min_add)
+
+
+class SlideSegmenter:
+    def __init__(self, dt):
+        self.dt = dt
+        self.cur = None
+        self.segments = []
+        self.saved_sigs = []
+        self.rejected = []
+        self.prev_sig = None
+        self.prev_box = None
+        self.noise_p = deque(maxlen=NOISE_WINDOW)
+        self.noise_i = deque(maxlen=NOISE_WINDOW)
+
+    def thresholds(self):
+        tp, ti = SAME_DIFF, SAME_INK
