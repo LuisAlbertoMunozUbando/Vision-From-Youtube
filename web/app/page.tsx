@@ -11,11 +11,14 @@ type Job = {
   title?: string | null;
   slides?: number | null;
   result_url?: string | null;
+  email?: string | null;
   error?: string | null;
 };
 
 export default function Home() {
   const [url, setUrl] = useState('');
+  const [email, setEmail] = useState('');
+  const [newsletter, setNewsletter] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -29,7 +32,11 @@ export default function Home() {
       const r = await fetch('/api/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ youtube_url: url.trim() }),
+        body: JSON.stringify({
+          youtube_url: url.trim(),
+          email: email.trim(),
+          newsletter,
+        }),
       });
       const body = await r.json();
       if (!r.ok) throw new Error(body.error || body.detail || 'No fue posible crear el trabajo');
@@ -69,19 +76,42 @@ export default function Home() {
 
         <form onSubmit={submit} className="card form">
           <label htmlFor="youtube">Enlace de YouTube</label>
-          <div className="row">
+          <input
+            id="youtube"
+            type="url"
+            inputMode="url"
+            placeholder="https://www.youtube.com/watch?v=..."
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            required
+          />
+
+          <label htmlFor="email" className="fieldLabel">Email para recibir tu PDF</label>
+          <input
+            id="email"
+            type="email"
+            inputMode="email"
+            placeholder="nombre@universidad.edu"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+
+          <label className="checkRow">
             <input
-              id="youtube"
-              type="url"
-              inputMode="url"
-              placeholder="https://www.youtube.com/watch?v=..."
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              required
+              type="checkbox"
+              checked={newsletter}
+              onChange={(e) => setNewsletter(e.target.checked)}
             />
-            <button disabled={busy || !url.trim()}>{busy ? 'Enviando…' : 'Extraer slides'}</button>
-          </div>
-          <small>El video se procesa en la Spark; Vercel no descarga ni analiza el video.</small>
+            <span>También quiero recibir novedades del Robotics Computing Lab.</span>
+          </label>
+
+          <button className="submitButton" disabled={busy || !url.trim() || !email.trim()}>
+            {busy ? 'Enviando…' : 'Extraer slides'}
+          </button>
+          <small>
+            Usamos tu email para entregarte el PDF y registrar el uso de SlideExtractor. El consentimiento para novedades es opcional.
+          </small>
         </form>
 
         {error && <div className="error">{error}</div>}
@@ -98,8 +128,11 @@ export default function Home() {
             <div className="progress"><div style={{ width: `${job.progress || 0}%` }} /></div>
             <p>{job.message || job.stage || 'En cola'}</p>
             {typeof job.slides === 'number' && <p><b>{job.slides}</b> slides detectados.</p>}
-            {job.status === 'done' && (
-              <a className="download" href={`/api/jobs/${job.id}/download`}>Descargar PDF</a>
+            {job.status === 'done' && job.result_url && (
+              <>
+                <a className="download" href={job.result_url} target="_blank" rel="noreferrer">Abrir / descargar PDF</a>
+                <p className="deliveryNote">También enviamos este enlace a <b>{job.email || email}</b>.</p>
+              </>
             )}
             {job.status === 'failed' && <div className="error">{job.error || 'El trabajo falló.'}</div>}
           </section>
@@ -108,7 +141,7 @@ export default function Home() {
         <section className="features">
           <article><b>GPU local</b><span>NVDEC + PyTorch/CUDA en la DGX Spark.</span></article>
           <article><b>Sin LLM</b><span>Detección visual determinista, sin consumo de tokens de IA.</span></article>
-          <article><b>Provenance</b><span>Cada captura conserva URL, título y tiempo exacto.</span></article>
+          <article><b>Drive + email</b><span>El PDF se publica en Google Drive y el enlace llega a tu correo.</span></article>
         </section>
       </section>
       <footer>Prof. Alberto Muñoz · Robotics Computing Lab · Tecnológico de Monterrey</footer>
