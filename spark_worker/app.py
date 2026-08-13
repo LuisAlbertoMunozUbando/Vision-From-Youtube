@@ -33,7 +33,7 @@ KEEP_LOCAL_RESULTS = os.getenv("KEEP_LOCAL_RESULTS", "1") == "1"
 DRIVE_BRIDGE_URL = os.getenv("DRIVE_BRIDGE_URL", "").strip()
 DRIVE_BRIDGE_SECRET = os.getenv("DRIVE_BRIDGE_SECRET", "").strip()
 
-app = FastAPI(title="SlideExtractor Spark Worker", version="1.4.0")
+app = FastAPI(title="SlideExtractor Spark Worker", version="1.5.0")
 job_queue: queue.Queue[str] = queue.Queue(maxsize=MAX_QUEUE)
 
 
@@ -164,8 +164,6 @@ def publish_to_drive(job_id: str, state: dict, pdf_path: Path, meta: dict) -> Op
     try:
         result = json.loads(raw)
     except json.JSONDecodeError:
-        # Some Apps Script executions return a Google HTML wrapper after the
-        # write has already completed. Drive archival is secondary to delivery.
         return None
 
     if not result.get("ok"):
@@ -204,39 +202,38 @@ def run_job(job_id: str):
             raise RuntimeError("Extraction completed but expected PDF/metadata are missing")
 
         meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        state.update(
-            progress=96,
-            stage="drive",
-            message="PDF generado; guardando copia en Google Drive",
-            title=meta.get("title"),
-            slides=meta.get("num_slides"),
-        )
-        save_state(job_id, state)
 
-        drive_url = None
-        drive_warning = None
-        try:
-            drive_url = publish_to_drive(job_id, state, local_pdf, meta)
-        except Exception as e:
-            # Google Drive is archival only. Never block delivery of a PDF that
-            # was successfully generated on Spark.
-            drive_warning = str(e)
-
-        message = "PDF listo. La descarga comenzará automáticamente."
-        if drive_warning:
-            message += " La copia en Drive no pudo confirmarse, pero tu PDF está listo."
-
+        # Delivery first: once the PDF exists locally, the job is complete.
+        # Google Drive is an archive destination and is intentionally kept out
+        # of the user-facing critical path.
         state.update(
             status="done",
             progress=100,
             stage="done",
-            message=message,
+            message="PDF listo. Descarga disponible.",
             title=meta.get("title"),
             slides=meta.get("num_slides"),
-            result_url=drive_url,
+            result_url=None,
             error=None,
         )
         save_state(job_id, state)
+
+        def archive_to_drive():
+            try:
+                drive_url = publish_to_drive(job_id, state, local_pdf, meta)
+                if drive_url:
+                    latest = load_state(job_id)
+                    latest["result_url"] = drive_url
+                    save_state(job_id, latest)
+            except Exception:
+                # Archive failure never changes a successfully completed job.
+                pass
+
+        threading.Thread(
+            target=archive_to_drive,
+            name=f"drive-{job_id[:8]}",
+            daemon=True,
+        ).start()
 
         if not KEEP_LOCAL_RESULTS:
             shutil.rmtree(jd / "work", ignore_errors=True)
