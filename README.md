@@ -8,7 +8,7 @@
 [![NVIDIA DGX Spark](https://img.shields.io/badge/NVIDIA-DGX%20Spark-76B900?style=for-the-badge&logo=nvidia&logoColor=white)](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)
 [![CUDA](https://img.shields.io/badge/CUDA-GPU%20Accelerated-76B900?style=for-the-badge&logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-zone)
 [![Next.js](https://img.shields.io/badge/Next.js-Vercel-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-Spark%20Worker-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Languages](https://img.shields.io/badge/UI-English%20%7C%20Espa%C3%B1ol-4f8cff?style=for-the-badge)](#bilingual-interface)
 
 **[Open the live application](https://vision-from-youtube.vercel.app)** · [Architecture](docs/ARCHITECTURE.md) · [Deployment](docs/DEPLOYMENT.md) · [Operations](docs/OPERATIONS.md) · [White Paper](docs/WHITEPAPER.md)
 
@@ -26,6 +26,12 @@ The browser submits a YouTube URL and an email identifier. Vercel proxies the re
 
 > **No LLM inference is used in the video-processing pipeline.** Slide detection is deterministic computer vision accelerated with FFmpeg/NVDEC, OpenCV and PyTorch/CUDA.
 
+## Bilingual interface
+
+The public frontend supports **English and Spanish** through an `EN / ES` selector in the top navigation. The first visit follows the browser language when Spanish is detected; afterward the chosen language is stored locally in the browser and reused on future visits.
+
+The bilingual layer covers the main explanatory copy, form labels, submission states, status labels, errors, download actions and feature descriptions. The extraction API and GPU pipeline remain language-independent.
+
 ## Design principle: delivery first
 
 The most important architectural decision is simple:
@@ -36,7 +42,7 @@ Google Drive is deliberately kept outside the critical user path. If Apps Script
 
 ```mermaid
 flowchart LR
-    U[User] -->|YouTube URL + email| V[Vercel / Next.js]
+    U[User EN / ES] -->|YouTube URL + email| V[Vercel / Next.js]
     V -->|server-side request| C[Cloudflare Tunnel]
     C --> S[FastAPI / DGX Spark]
     S --> Y[yt-dlp]
@@ -52,7 +58,7 @@ flowchart LR
 
 | Layer | Technology | Responsibility |
 |---|---|---|
-| Public UX | Next.js + Vercel | Form, progress, status polling, PDF download |
+| Public UX | Next.js + Vercel | Bilingual UI, form, progress, status polling, PDF download |
 | Secure bridge | Cloudflare Tunnel | Outbound-only access to the local worker |
 | Control plane | FastAPI + Uvicorn | Queue, job state and PDF streaming |
 | Video acquisition | yt-dlp + FFmpeg | Public YouTube video retrieval and decoding |
@@ -63,11 +69,12 @@ flowchart LR
 
 ## User experience
 
-1. Paste a public YouTube URL.
-2. Enter an email address used only as the PDF identifier/name.
-3. Follow extraction progress in the browser.
-4. When the PDF exists, the job becomes `done` and the browser enables download immediately.
-5. The system archives a secondary copy in Google Drive without blocking delivery.
+1. Choose **EN** or **ES**; the preference is remembered locally.
+2. Paste a public YouTube URL.
+3. Enter an email address used only as the PDF identifier/name.
+4. Follow extraction progress in the browser.
+5. When the PDF exists, the job becomes `done` and the browser enables download immediately.
+6. The system archives a secondary copy in Google Drive without blocking delivery.
 
 ## Extraction pipeline
 
