@@ -1,6 +1,5 @@
 'use client';
 
-// Deployment sync marker: GitHub-connected production.
 import { FormEvent, useEffect, useRef, useState } from 'react';
 
 type Job = {
@@ -80,11 +79,18 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [job?.id, job?.status]);
 
+  const pdfReady = Boolean(
+    job &&
+    job.status !== 'failed' &&
+    (job.status === 'done' ||
+      (job.progress >= 100 && (job.message || '').toLowerCase().includes('pdf listo')))
+  );
+
   useEffect(() => {
-    if (!job || job.status !== 'done' || downloadedJob.current === job.id) return;
+    if (!job || !pdfReady || downloadedJob.current === job.id) return;
     downloadedJob.current = job.id;
 
-    // Start the download without navigating away from the status page.
+    // Download without navigating away from the status page.
     const link = document.createElement('a');
     link.href = `/api/jobs/${job.id}/download`;
     link.download = '';
@@ -92,7 +98,7 @@ export default function Home() {
     document.body.appendChild(link);
     link.click();
     link.remove();
-  }, [job?.id, job?.status]);
+  }, [job?.id, pdfReady]);
 
   return (
     <main className="shell">
@@ -140,7 +146,7 @@ export default function Home() {
           <section className="card status" aria-live="polite">
             <div className="statusHeader">
               <div>
-                <span className={`pill ${job.status}`}>{job.status}</span>
+                <span className={`pill ${pdfReady ? 'done' : job.status}`}>{pdfReady ? 'done' : job.status}</span>
                 <h2>{job.title || 'Procesando video'}</h2>
               </div>
               <strong>{Math.round(job.progress || 0)}%</strong>
@@ -148,13 +154,28 @@ export default function Home() {
             <div className="progress"><div style={{ width: `${job.progress || 0}%` }} /></div>
             <p>{job.message || job.stage || 'En cola'}</p>
             {typeof job.slides === 'number' && <p><b>{job.slides}</b> slides detectados.</p>}
-            {job.status === 'done' && (
+
+            {pdfReady && (
               <>
-                <a className="download" href={`/api/jobs/${job.id}/download`}>Descargar PDF nuevamente</a>
-                {job.result_url && <a className="download" href={job.result_url} target="_blank" rel="noreferrer">Abrir copia en Google Drive</a>}
-                <p className="deliveryNote">PDF listo. La descarga automática fue iniciada; si el navegador la bloquea, usa el botón de arriba.</p>
+                <h2>✅ PDF listo</h2>
+                <a
+                  className="download"
+                  href={`/api/jobs/${job.id}/download`}
+                  download
+                >
+                  Descargar PDF
+                </a>
+                {job.result_url && (
+                  <a className="download" href={job.result_url} target="_blank" rel="noreferrer">
+                    Abrir copia en Google Drive
+                  </a>
+                )}
+                <p className="deliveryNote">
+                  Intentamos iniciar la descarga automáticamente. Si el navegador la bloquea, pulsa “Descargar PDF”.
+                </p>
               </>
             )}
+
             {job.status === 'failed' && <div className="error">{job.error || 'El trabajo falló.'}</div>}
           </section>
         )}
@@ -162,7 +183,7 @@ export default function Home() {
         <section className="features">
           <article><b>GPU local</b><span>NVDEC + PyTorch/CUDA en la DGX Spark.</span></article>
           <article><b>Sin LLM</b><span>Detección visual determinista, sin consumo de tokens de IA.</span></article>
-          <article><b>Drive + descarga</b><span>Se guarda una copia en Drive y el PDF se descarga automáticamente.</span></article>
+          <article><b>Drive + descarga</b><span>Se guarda una copia con el email como nombre y el PDF se entrega al usuario.</span></article>
         </section>
       </section>
       <footer>Prof. Alberto Muñoz · Robotics Computing Lab · Tecnológico de Monterrey</footer>
