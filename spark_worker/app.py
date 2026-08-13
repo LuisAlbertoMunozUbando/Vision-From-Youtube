@@ -33,7 +33,7 @@ KEEP_LOCAL_RESULTS = os.getenv("KEEP_LOCAL_RESULTS", "1") == "1"
 DRIVE_BRIDGE_URL = os.getenv("DRIVE_BRIDGE_URL", "").strip()
 DRIVE_BRIDGE_SECRET = os.getenv("DRIVE_BRIDGE_SECRET", "").strip()
 
-app = FastAPI(title="SlideExtractor Spark Worker", version="1.3.0")
+app = FastAPI(title="SlideExtractor Spark Worker", version="1.4.0")
 job_queue: queue.Queue[str] = queue.Queue(maxsize=MAX_QUEUE)
 
 
@@ -158,17 +158,15 @@ def publish_to_drive(job_id: str, state: dict, pdf_path: Path, meta: dict) -> Op
     except Exception as e:
         raise RuntimeError(f"Google Drive bridge failed: {e}") from e
 
-    # Apps Script can occasionally return an empty body after successfully
-    # completing the Drive write. Treat an empty HTTP-success response as a
-    # successful archival operation; the user download is served independently
-    # from Spark/Vercel.
     if not raw:
         return None
 
     try:
         result = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Google Drive bridge returned non-JSON response: {raw[:300]}") from e
+    except json.JSONDecodeError:
+        # Some Apps Script executions return a Google HTML wrapper after the
+        # write has already completed. Drive archival is secondary to delivery.
+        return None
 
     if not result.get("ok"):
         raise RuntimeError(f"Google Drive bridge error: {result.get('error') or result}")
@@ -209,18 +207,30 @@ def run_job(job_id: str):
         state.update(
             progress=96,
             stage="drive",
-            message="Guardando una copia del PDF en Google Drive",
+            message="PDF generado; guardando copia en Google Drive",
             title=meta.get("title"),
             slides=meta.get("num_slides"),
         )
         save_state(job_id, state)
 
-        drive_url = publish_to_drive(job_id, state, local_pdf, meta)
+        drive_url = None
+        drive_warning = None
+        try:
+            drive_url = publish_to_drive(job_id, state, local_pdf, meta)
+        except Exception as e:
+            # Google Drive is archival only. Never block delivery of a PDF that
+            # was successfully generated on Spark.
+            drive_warning = str(e)
+
+        message = "PDF listo. La descarga comenzará automáticamente."
+        if drive_warning:
+            message += " La copia en Drive no pudo confirmarse, pero tu PDF está listo."
+
         state.update(
             status="done",
             progress=100,
             stage="done",
-            message="PDF listo. La descarga comenzará automáticamente.",
+            message=message,
             title=meta.get("title"),
             slides=meta.get("num_slides"),
             result_url=drive_url,
