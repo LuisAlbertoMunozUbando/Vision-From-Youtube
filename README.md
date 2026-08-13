@@ -1,53 +1,108 @@
-# SlideExtractor — YouTube to Slides on NVIDIA DGX Spark
+<div align="center">
 
-SlideExtractor is a web service that extracts distinct presentation slides from public YouTube videos using a local NVIDIA DGX Spark as the GPU worker. The browser submits a YouTube URL and an email identifier; the Spark downloads and analyzes the video, removes repeated frames, preserves the most complete slide state, adds provenance/timestamps, builds a PDF, exposes it for direct download, and archives a copy in Google Drive under the requester's email address.
+# SlideExtractor
+### Vision From YouTube
 
-> **No LLM inference is used in the video-processing pipeline.** Slide detection is deterministic computer vision accelerated with FFmpeg/NVDEC and PyTorch/CUDA.
+**GPU-accelerated slide extraction from public YouTube presentations — powered by NVIDIA DGX Spark.**
 
-## Production flow
+[![NVIDIA DGX Spark](https://img.shields.io/badge/NVIDIA-DGX%20Spark-76B900?style=for-the-badge&logo=nvidia&logoColor=white)](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)
+[![CUDA](https://img.shields.io/badge/CUDA-GPU%20Accelerated-76B900?style=for-the-badge&logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-zone)
+[![Next.js](https://img.shields.io/badge/Next.js-Vercel-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-Spark%20Worker-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+
+**[Open the live application](https://vision-from-youtube.vercel.app)** · [Architecture](docs/ARCHITECTURE.md) · [Deployment](docs/DEPLOYMENT.md) · [Operations](docs/OPERATIONS.md) · [White Paper source](docs/WHITEPAPER.tex)
+
+*Robotics Computing Lab · Tecnológico de Monterrey*
+
+</div>
+
+---
+
+## What it does
+
+SlideExtractor turns a public YouTube presentation into a clean PDF containing the **distinct, most complete slide states** found in the video. It removes redundant frames, preserves provenance and timestamps, and performs the computationally intensive work on a local **NVIDIA DGX Spark**.
+
+The browser submits a YouTube URL and an email identifier. Vercel proxies the request to a FastAPI worker through Cloudflare Tunnel; the Spark downloads and analyzes the video, creates the PDF and makes it immediately downloadable. A copy is then archived asynchronously in Google Drive.
+
+> **No LLM inference is used in the video-processing pipeline.** Slide detection is deterministic computer vision accelerated with FFmpeg/NVDEC, OpenCV and PyTorch/CUDA.
+
+## Design principle: delivery first
+
+The most important architectural decision is simple:
+
+> **A successfully generated local PDF is enough to declare the job complete.**
+
+Google Drive is deliberately kept outside the critical user path. If Apps Script or Drive fails, the user can still download the PDF.
 
 ```mermaid
 flowchart LR
-    U[Browser] -->|YouTube URL + email| V[Vercel / Next.js]
-    V -->|Bearer-protected API| C[Cloudflare Tunnel]
-    C --> S[FastAPI on DGX Spark]
+    U[User] -->|YouTube URL + email| V[Vercel / Next.js]
+    V -->|server-side Bearer token| C[Cloudflare Tunnel]
+    C --> S[FastAPI / DGX Spark]
     S --> Y[yt-dlp]
-    Y --> G[NVDEC + CUDA slide extraction]
-    G --> P[PDF + timestamps/provenance]
-    P --> D[Direct browser download]
-    P -. asynchronous archive .-> A[Google Apps Script]
-    A --> R[Google Drive / SlidesOut]
+    Y --> G[NVDEC + CUDA extraction]
+    G --> P[Local PDF]
+    P -->|critical path| V
+    V -->|download| U
+    P -. best effort .-> A[Google Apps Script]
+    A -. archive .-> D[Google Drive / SlidesOut]
 ```
 
-The critical design rule is that **PDF delivery does not depend on Google Drive**. As soon as the local PDF exists, the job becomes `done` and the download endpoint is enabled. Drive archival happens separately, so an Apps Script or Drive permission failure cannot block delivery to the user.
+## System at a glance
 
-## Main components
-
-- **`web/`** — Next.js frontend and Vercel API proxy.
-- **`spark_worker/`** — FastAPI queue/worker and GPU extraction pipeline for the DGX Spark.
-- **`google_apps_script/`** — minimal Google Apps Script bridge used only to archive the generated PDF in `SlidesOut`.
-- **`docs/`** — architecture, deployment, operations and project-structure documentation.
+| Layer | Technology | Responsibility |
+|---|---|---|
+| Public UX | Next.js + Vercel | Form, progress, status polling, PDF download |
+| Secure bridge | Cloudflare Tunnel | Outbound-only access to the local worker |
+| Control plane | FastAPI + Uvicorn | Queue, job state, authentication, PDF streaming |
+| Video acquisition | yt-dlp + FFmpeg | Public YouTube video retrieval and decoding |
+| GPU processing | NVDEC + CUDA + PyTorch | Efficient frame analysis and slide segmentation |
+| Vision | OpenCV + NumPy + Pillow | De-duplication, sharpness and slide-state selection |
+| Output | PDF | Timestamped/provenance-aware slide document |
+| Archive | Apps Script + Google Drive | Asynchronous secondary copy in `SlidesOut` |
 
 ## User experience
 
 1. Paste a public YouTube URL.
-2. Enter an email address. It is used only to identify/name the PDF; no email is sent.
-3. The page shows extraction progress.
-4. When complete, the browser attempts the download automatically and shows a persistent **Download PDF** button.
-5. A copy is archived in Google Drive as `user@example.com.pdf`.
+2. Enter an email address used only as the PDF identifier/name.
+3. Follow extraction progress in the browser.
+4. When the PDF exists, the job becomes `done` and the browser enables download immediately.
+5. The system archives a secondary copy in Google Drive without blocking delivery.
 
-## Repository structure
+## Extraction pipeline
+
+```mermaid
+flowchart LR
+    A[YouTube] --> B[yt-dlp]
+    B --> C[Pass A\ncontent analysis]
+    C --> D[Pass B\nNVDEC + CUDA segmentation]
+    D --> E[Pass C\nnative-resolution seek]
+    E --> F[Sharpest complete slide]
+    F --> G[Timestamp + provenance]
+    G --> H[PDF]
+```
+
+Conceptually the extractor operates in three stages:
+
+- **Pass A — content analysis:** keyframe/content analysis and noise filtering.
+- **Pass B — GPU segmentation:** reduced-rate slide-state segmentation using hardware decoding and CUDA-assisted analysis.
+- **Pass C — final capture:** native-resolution seek, sharpest-frame selection, provenance/timestamp stamping and PDF rendering.
+
+## Repository map
 
 ```text
 Vision-From-Youtube/
 ├── README.md
 ├── SECURITY.md
+├── CHANGELOG.md
 ├── .gitignore
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── DEPLOYMENT.md
 │   ├── OPERATIONS.md
-│   └── PROJECT_STRUCTURE.md
+│   ├── PROJECT_STRUCTURE.md
+│   ├── PROJECT_DOCUMENTATION.md
+│   └── WHITEPAPER.tex
 ├── google_apps_script/
 │   └── Code.gs
 ├── spark_worker/
@@ -81,24 +136,26 @@ Vision-From-Youtube/
                 └── download/route.ts
 ```
 
-## Spark worker
+See [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md) for the role of each source file.
+
+## API contract
 
 The Spark worker exposes:
 
-- `GET /health` — public health check.
-- `POST /v1/jobs` — creates an extraction job; Bearer protected.
-- `GET /v1/jobs/{id}` — job state/progress; Bearer protected.
-- `GET /v1/jobs/{id}/pdf` — streams the completed PDF; Bearer protected.
+```text
+GET  /health
+POST /v1/jobs
+GET  /v1/jobs/{job_id}
+GET  /v1/jobs/{job_id}/pdf
+```
 
-The worker binds to `127.0.0.1:8000` and is exposed externally only through Cloudflare Tunnel.
+The job endpoints are protected with a Bearer token and are intended to be called by Vercel, not directly by the browser. The worker binds to `127.0.0.1:8000` and is exposed externally only through Cloudflare Tunnel.
 
-## Environment variables
+## Configuration
 
-### DGX Spark
+### NVIDIA DGX Spark
 
-See `spark_worker/.env.example`.
-
-Important values:
+See [`spark_worker/.env.example`](spark_worker/.env.example).
 
 ```text
 SLIDEEXTRACTOR_API_KEY=...
@@ -112,79 +169,77 @@ DRIVE_BRIDGE_SECRET=...
 
 ### Vercel
 
-See `web/.env.example`.
+See [`web/.env.example`](web/.env.example).
 
 ```text
 SPARK_API_URL=https://<cloudflare-tunnel-hostname>
 SPARK_API_KEY=<same bearer secret used by Spark>
 ```
 
-Never expose either key using a `NEXT_PUBLIC_` prefix.
+Never expose either key with a `NEXT_PUBLIC_` prefix.
 
-## Local Spark service
+## Operations
 
-Typical service check:
+Typical Spark health check:
 
 ```bash
 sudo systemctl status slideextractor-worker
 curl http://127.0.0.1:8000/health
 ```
 
-The systemd service runs Uvicorn with one worker so the in-memory job queue remains consistent.
+Expected response:
 
-## Cloudflare Tunnel
+```json
+{"ok": true, "queue": 0, "max_queue": 8}
+```
 
-The DGX Spark does not require inbound router configuration. `cloudflared` creates an outbound tunnel to the local FastAPI service. HTTP/2 is suitable where QUIC/UDP 7844 is blocked.
-
-Example quick tunnel:
+A quick HTTP/2 tunnel can be started with:
 
 ```bash
 cloudflared tunnel --protocol http2 --url http://127.0.0.1:8000
 ```
 
-For long-term operation, use a named tunnel and a persistent systemd service.
-
-## Google Drive archive
-
-`google_apps_script/Code.gs` receives the generated PDF, decodes the Base64 payload and stores it in the configured `SlidesOut` folder. The filename is derived from the requester's email.
-
-Drive is an **archive path, not a delivery dependency**. The browser downloads through Vercel from the Spark endpoint.
-
-## Extraction pipeline
-
-Conceptually the extractor performs three stages:
-
-```text
-Pass A — content/keyframe analysis and noise filtering
-Pass B — low-rate GPU slide segmentation with NVDEC/CUDA
-Pass C — native-resolution seek, sharpest-frame selection and PDF rendering
-```
-
-The output keeps source provenance, including the original video context and timestamp for each selected slide.
+For long-running deployments, use a named tunnel and a persistent service. Full procedures are in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 ## Security model
 
-- Browser never receives the Spark API key.
-- Vercel is the only public application-facing API layer.
-- Spark listens on loopback only.
+- The browser never receives the Spark API key.
+- Vercel is the public application boundary.
+- FastAPI listens on loopback only.
 - Cloudflare Tunnel avoids inbound port forwarding.
-- Job IDs are unguessable UUIDs.
-- PDF download is proxied through Vercel.
-- Drive files may remain private; user delivery does not require Drive sharing.
-- Secrets and `.env` files must never be committed.
+- Job IDs use UUIDs.
+- PDF delivery is proxied through Vercel.
+- Google Drive is not required for successful user delivery.
+- Real secrets and `.env` files must never be committed.
 
-See [`SECURITY.md`](SECURITY.md) for operational security notes.
+See [`SECURITY.md`](SECURITY.md) for operational hardening notes.
 
-## Documentation
+## Technical documentation
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system design and data flow.
-- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — deployment/configuration steps.
-- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — health checks and troubleshooting.
-- [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md) — role of every source file.
+| Document | Purpose |
+|---|---|
+| [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System design, invariants and data flow |
+| [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Spark, Cloudflare, Vercel and Apps Script deployment |
+| [`OPERATIONS.md`](docs/OPERATIONS.md) | Health checks, restart sequence and troubleshooting |
+| [`PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md) | Source-tree reference |
+| [`PROJECT_DOCUMENTATION.md`](docs/PROJECT_DOCUMENTATION.md) | Compact project-level technical overview |
+| [`WHITEPAPER.tex`](docs/WHITEPAPER.tex) | Formal LaTeX white paper source |
 
-## Project identity
+## Why this architecture matters
 
-**SlideExtractor / Vision From YouTube**  
-Prof. Alberto Muñoz  
-Robotics Computing Lab  
-Tecnológico de Monterrey
+SlideExtractor is an example of a useful hybrid pattern: **a lightweight public cloud interface coordinating specialised local GPU infrastructure without exposing the GPU host directly to the Internet**.
+
+The DGX Spark stays close to the video and vision workload; Vercel provides the public experience; Cloudflare supplies the network bridge; and Google Drive acts as a secondary archive rather than a fragile dependency.
+
+---
+
+<div align="center">
+
+### SlideExtractor · Vision From YouTube
+
+**Prof. Alberto Muñoz**  
+Robotics Computing Lab · Tecnológico de Monterrey
+
+Built for research, teaching and experimentation with GPU-accelerated computer vision.
+
+</div>
