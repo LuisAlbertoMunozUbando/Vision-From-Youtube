@@ -1,7 +1,7 @@
 'use client';
 
 // Deployment sync marker: GitHub-connected production.
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 
 type Job = {
   id: string;
@@ -38,25 +38,22 @@ function readableError(body: any, fallback: string): string {
 export default function Home() {
   const [url, setUrl] = useState('');
   const [email, setEmail] = useState('');
-  const [newsletter, setNewsletter] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const downloadedJob = useRef<string | null>(null);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError('');
     setBusy(true);
     setJob(null);
+    downloadedJob.current = null;
     try {
       const r = await fetch('/api/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          youtube_url: url.trim(),
-          email: email.trim(),
-          newsletter,
-        }),
+        body: JSON.stringify({ youtube_url: url.trim(), email: email.trim() }),
       });
       const body = await r.json();
       if (!r.ok) throw new Error(readableError(body, 'No fue posible crear el trabajo'));
@@ -83,6 +80,12 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [job?.id, job?.status]);
 
+  useEffect(() => {
+    if (!job || job.status !== 'done' || downloadedJob.current === job.id) return;
+    downloadedJob.current = job.id;
+    window.location.assign(`/api/jobs/${job.id}/download`);
+  }, [job?.id, job?.status]);
+
   return (
     <main className="shell">
       <section className="hero">
@@ -106,7 +109,7 @@ export default function Home() {
             required
           />
 
-          <label htmlFor="email" className="fieldLabel">Email para recibir tu PDF</label>
+          <label htmlFor="email" className="fieldLabel">Email para identificar tu PDF</label>
           <input
             id="email"
             type="email"
@@ -117,21 +120,10 @@ export default function Home() {
             required
           />
 
-          <label className="checkRow">
-            <input
-              type="checkbox"
-              checked={newsletter}
-              onChange={(e) => setNewsletter(e.target.checked)}
-            />
-            <span>También quiero recibir novedades del Robotics Computing Lab.</span>
-          </label>
-
           <button className="submitButton" disabled={busy || !url.trim() || !email.trim()}>
             {busy ? 'Enviando…' : 'Extraer slides'}
           </button>
-          <small>
-            Usamos tu email para entregarte el PDF y registrar el uso de SlideExtractor. El consentimiento para novedades es opcional.
-          </small>
+          <small>El email se usa únicamente para identificar y nombrar tu PDF. No se envía correo.</small>
         </form>
 
         {error && <div className="error">{error}</div>}
@@ -148,10 +140,11 @@ export default function Home() {
             <div className="progress"><div style={{ width: `${job.progress || 0}%` }} /></div>
             <p>{job.message || job.stage || 'En cola'}</p>
             {typeof job.slides === 'number' && <p><b>{job.slides}</b> slides detectados.</p>}
-            {job.status === 'done' && job.result_url && (
+            {job.status === 'done' && (
               <>
-                <a className="download" href={job.result_url} target="_blank" rel="noreferrer">Abrir / descargar PDF</a>
-                <p className="deliveryNote">También enviamos este enlace a <b>{job.email || email}</b>.</p>
+                <a className="download" href={`/api/jobs/${job.id}/download`}>Descargar PDF nuevamente</a>
+                {job.result_url && <a className="download" href={job.result_url} target="_blank" rel="noreferrer">Abrir copia en Google Drive</a>}
+                <p className="deliveryNote">La descarga automática ya fue iniciada.</p>
               </>
             )}
             {job.status === 'failed' && <div className="error">{job.error || 'El trabajo falló.'}</div>}
@@ -161,7 +154,7 @@ export default function Home() {
         <section className="features">
           <article><b>GPU local</b><span>NVDEC + PyTorch/CUDA en la DGX Spark.</span></article>
           <article><b>Sin LLM</b><span>Detección visual determinista, sin consumo de tokens de IA.</span></article>
-          <article><b>Drive + email</b><span>El PDF se publica en Google Drive y el enlace llega a tu correo.</span></article>
+          <article><b>Drive + descarga</b><span>Se guarda una copia en Drive y el PDF se descarga automáticamente.</span></article>
         </section>
       </section>
       <footer>Prof. Alberto Muñoz · Robotics Computing Lab · Tecnológico de Monterrey</footer>
