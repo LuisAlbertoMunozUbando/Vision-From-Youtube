@@ -83,7 +83,15 @@ export default function Home() {
   useEffect(() => {
     if (!job || job.status !== 'done' || downloadedJob.current === job.id) return;
     downloadedJob.current = job.id;
-    window.location.assign(`/api/jobs/${job.id}/download`);
+
+    // Start the download without navigating away from the status page.
+    const link = document.createElement('a');
+    link.href = `/api/jobs/${job.id}/download`;
+    link.download = '';
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   }, [job?.id, job?.status]);
 
   return (
@@ -144,7 +152,7 @@ export default function Home() {
               <>
                 <a className="download" href={`/api/jobs/${job.id}/download`}>Descargar PDF nuevamente</a>
                 {job.result_url && <a className="download" href={job.result_url} target="_blank" rel="noreferrer">Abrir copia en Google Drive</a>}
-                <p className="deliveryNote">La descarga automática ya fue iniciada.</p>
+                <p className="deliveryNote">PDF listo. La descarga automática fue iniciada; si el navegador la bloquea, usa el botón de arriba.</p>
               </>
             )}
             {job.status === 'failed' && <div className="error">{job.error || 'El trabajo falló.'}</div>}
