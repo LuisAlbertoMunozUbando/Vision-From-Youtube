@@ -33,7 +33,7 @@ KEEP_LOCAL_RESULTS = os.getenv("KEEP_LOCAL_RESULTS", "1") == "1"
 DRIVE_BRIDGE_URL = os.getenv("DRIVE_BRIDGE_URL", "").strip()
 DRIVE_BRIDGE_SECRET = os.getenv("DRIVE_BRIDGE_SECRET", "").strip()
 
-app = FastAPI(title="SlideExtractor Spark Worker", version="1.2.0")
+app = FastAPI(title="SlideExtractor Spark Worker", version="1.3.0")
 job_queue: queue.Queue[str] = queue.Queue(maxsize=MAX_QUEUE)
 
 
@@ -77,6 +77,11 @@ def valid_youtube_url(url: str) -> bool:
 
 def valid_email(email: str) -> bool:
     return re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email.strip()) is not None
+
+
+def safe_email_filename(email: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9@._+-]+", "_", email.strip().lower()).strip("._")
+    return f"{safe or 'slides'}.pdf"
 
 
 def job_dir(job_id: str) -> Path:
@@ -123,7 +128,7 @@ def merged_state(job_id: str) -> dict:
     return state
 
 
-def publish_to_drive(job_id: str, state: dict, pdf_path: Path, meta: dict) -> str:
+def publish_to_drive(job_id: str, state: dict, pdf_path: Path, meta: dict) -> Optional[str]:
     if not DRIVE_BRIDGE_URL or not DRIVE_BRIDGE_SECRET:
         raise RuntimeError("DRIVE_BRIDGE_URL/DRIVE_BRIDGE_SECRET are not configured on Spark")
 
@@ -131,11 +136,10 @@ def publish_to_drive(job_id: str, state: dict, pdf_path: Path, meta: dict) -> st
         "secret": DRIVE_BRIDGE_SECRET,
         "job_id": job_id,
         "email": state["email"],
-        "newsletter": bool(state.get("newsletter")),
         "youtube_url": state["youtube_url"],
         "title": meta.get("title") or "YouTube Slides",
         "slides": int(meta.get("num_slides") or 0),
-        "filename": f"slides-{job_id[:8]}.pdf",
+        "filename": safe_email_filename(state["email"]),
         "pdf_base64": base64.b64encode(pdf_path.read_bytes()).decode("ascii"),
     }
     body = json.dumps(payload).encode("utf-8")
@@ -147,16 +151,28 @@ def publish_to_drive(job_id: str, state: dict, pdf_path: Path, meta: dict) -> st
     )
     try:
         with urllib.request.urlopen(req, timeout=240) as response:
-            result = json.loads(response.read().decode("utf-8"))
+            raw = response.read().decode("utf-8", errors="replace").strip()
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace")[-1000:]
         raise RuntimeError(f"Google Drive bridge returned HTTP {e.code}: {detail}") from e
     except Exception as e:
         raise RuntimeError(f"Google Drive bridge failed: {e}") from e
 
-    if not result.get("ok") or not result.get("url"):
+    # Apps Script can occasionally return an empty body after successfully
+    # completing the Drive write. Treat an empty HTTP-success response as a
+    # successful archival operation; the user download is served independently
+    # from Spark/Vercel.
+    if not raw:
+        return None
+
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Google Drive bridge returned non-JSON response: {raw[:300]}") from e
+
+    if not result.get("ok"):
         raise RuntimeError(f"Google Drive bridge error: {result.get('error') or result}")
-    return str(result["url"])
+    return str(result.get("url") or "") or None
 
 
 def run_job(job_id: str):
@@ -193,7 +209,7 @@ def run_job(job_id: str):
         state.update(
             progress=96,
             stage="drive",
-            message="Publicando PDF en Google Drive y enviando email",
+            message="Guardando una copia del PDF en Google Drive",
             title=meta.get("title"),
             slides=meta.get("num_slides"),
         )
@@ -204,7 +220,7 @@ def run_job(job_id: str):
             status="done",
             progress=100,
             stage="done",
-            message="PDF listo en Google Drive; enlace enviado por email",
+            message="PDF listo. La descarga comenzará automáticamente.",
             title=meta.get("title"),
             slides=meta.get("num_slides"),
             result_url=drive_url,
@@ -269,7 +285,7 @@ def create_job(req: JobRequest):
         "id": jid,
         "youtube_url": url,
         "email": email,
-        "newsletter": bool(req.newsletter),
+        "newsletter": False,
         "status": "queued",
         "progress": 0,
         "stage": "queued",
@@ -304,6 +320,6 @@ def download_job_pdf(job_id: str):
     return FileResponse(
         path=str(pdf),
         media_type="application/pdf",
-        filename=f"slides-{job_id[:8]}.pdf",
+        filename=safe_email_filename(state.get("email") or "slides"),
         headers={"Cache-Control": "private, no-store"},
     )
