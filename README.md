@@ -10,7 +10,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-Vercel-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Spark%20Worker-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 
-**[Open the live application](https://vision-from-youtube.vercel.app)** · [Architecture](docs/ARCHITECTURE.md) · [Deployment](docs/DEPLOYMENT.md) · [Operations](docs/OPERATIONS.md) · [White Paper source](docs/WHITEPAPER.tex)
+**[Open the live application](https://vision-from-youtube.vercel.app)** · [Architecture](docs/ARCHITECTURE.md) · [Deployment](docs/DEPLOYMENT.md) · [Operations](docs/OPERATIONS.md) · [White Paper](docs/WHITEPAPER.md)
 
 *Robotics Computing Lab · Tecnológico de Monterrey*
 
@@ -37,7 +37,7 @@ Google Drive is deliberately kept outside the critical user path. If Apps Script
 ```mermaid
 flowchart LR
     U[User] -->|YouTube URL + email| V[Vercel / Next.js]
-    V -->|server-side Bearer token| C[Cloudflare Tunnel]
+    V -->|server-side request| C[Cloudflare Tunnel]
     C --> S[FastAPI / DGX Spark]
     S --> Y[yt-dlp]
     Y --> G[NVDEC + CUDA extraction]
@@ -54,7 +54,7 @@ flowchart LR
 |---|---|---|
 | Public UX | Next.js + Vercel | Form, progress, status polling, PDF download |
 | Secure bridge | Cloudflare Tunnel | Outbound-only access to the local worker |
-| Control plane | FastAPI + Uvicorn | Queue, job state, authentication, PDF streaming |
+| Control plane | FastAPI + Uvicorn | Queue, job state and PDF streaming |
 | Video acquisition | yt-dlp + FFmpeg | Public YouTube video retrieval and decoding |
 | GPU processing | NVDEC + CUDA + PyTorch | Efficient frame analysis and slide segmentation |
 | Vision | OpenCV + NumPy + Pillow | De-duplication, sharpness and slide-state selection |
@@ -74,9 +74,9 @@ flowchart LR
 ```mermaid
 flowchart LR
     A[YouTube] --> B[yt-dlp]
-    B --> C[Pass A\ncontent analysis]
-    C --> D[Pass B\nNVDEC + CUDA segmentation]
-    D --> E[Pass C\nnative-resolution seek]
+    B --> C[Pass A: content analysis]
+    C --> D[Pass B: NVDEC + CUDA segmentation]
+    D --> E[Pass C: native-resolution seek]
     E --> F[Sharpest complete slide]
     F --> G[Timestamp + provenance]
     G --> H[PDF]
@@ -94,15 +94,13 @@ Conceptually the extractor operates in three stages:
 Vision-From-Youtube/
 ├── README.md
 ├── SECURITY.md
-├── CHANGELOG.md
 ├── .gitignore
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── DEPLOYMENT.md
 │   ├── OPERATIONS.md
 │   ├── PROJECT_STRUCTURE.md
-│   ├── PROJECT_DOCUMENTATION.md
-│   └── WHITEPAPER.tex
+│   └── WHITEPAPER.md
 ├── google_apps_script/
 │   └── Code.gs
 ├── spark_worker/
@@ -149,34 +147,17 @@ GET  /v1/jobs/{job_id}
 GET  /v1/jobs/{job_id}/pdf
 ```
 
-The job endpoints are protected with a Bearer token and are intended to be called by Vercel, not directly by the browser. The worker binds to `127.0.0.1:8000` and is exposed externally only through Cloudflare Tunnel.
+The job endpoints are intended to be called by Vercel rather than directly by the browser. The worker binds to `127.0.0.1:8000` and is exposed externally only through Cloudflare Tunnel.
 
 ## Configuration
 
 ### NVIDIA DGX Spark
 
-See [`spark_worker/.env.example`](spark_worker/.env.example).
-
-```text
-SLIDEEXTRACTOR_API_KEY=...
-MAX_QUEUE=8
-MAX_HEIGHT=1080
-KEEP_LOCAL_RESULTS=1
-JOBS_DIR=/home/alberto/slideextractor/jobs
-DRIVE_BRIDGE_URL=https://script.google.com/macros/s/.../exec
-DRIVE_BRIDGE_SECRET=...
-```
+See [`spark_worker/.env.example`](spark_worker/.env.example) for the safe configuration template. Runtime credentials must remain outside GitHub.
 
 ### Vercel
 
-See [`web/.env.example`](web/.env.example).
-
-```text
-SPARK_API_URL=https://<cloudflare-tunnel-hostname>
-SPARK_API_KEY=<same bearer secret used by Spark>
-```
-
-Never expose either key with a `NEXT_PUBLIC_` prefix.
+See [`web/.env.example`](web/.env.example). Deployment values are configured server-side and should never be exposed through browser-public environment variables.
 
 ## Operations
 
@@ -187,23 +168,17 @@ sudo systemctl status slideextractor-worker
 curl http://127.0.0.1:8000/health
 ```
 
-Expected response:
-
-```json
-{"ok": true, "queue": 0, "max_queue": 8}
-```
-
 A quick HTTP/2 tunnel can be started with:
 
 ```bash
 cloudflared tunnel --protocol http2 --url http://127.0.0.1:8000
 ```
 
-For long-running deployments, use a named tunnel and a persistent service. Full procedures are in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+For long-running deployments, use a named tunnel and a persistent service. Full public procedures are in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 ## Security model
 
-- The browser never receives the Spark API key.
+- The browser never receives backend credentials.
 - Vercel is the public application boundary.
 - FastAPI listens on loopback only.
 - Cloudflare Tunnel avoids inbound port forwarding.
@@ -222,8 +197,7 @@ See [`SECURITY.md`](SECURITY.md) for operational hardening notes.
 | [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Spark, Cloudflare, Vercel and Apps Script deployment |
 | [`OPERATIONS.md`](docs/OPERATIONS.md) | Health checks, restart sequence and troubleshooting |
 | [`PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md) | Source-tree reference |
-| [`PROJECT_DOCUMENTATION.md`](docs/PROJECT_DOCUMENTATION.md) | Compact project-level technical overview |
-| [`WHITEPAPER.tex`](docs/WHITEPAPER.tex) | Formal LaTeX white paper source |
+| [`WHITEPAPER.md`](docs/WHITEPAPER.md) | Formal project white paper |
 
 ## Why this architecture matters
 
