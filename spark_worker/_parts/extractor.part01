@@ -171,7 +171,7 @@ def get_video_metadata(url: str, max_minutes: int) -> dict:
     ]
     r = run(cmd, timeout=120)
     if r.returncode != 0:
-        raise RuntimeError(f"yt-dlp could not read the video metadata: {r.stderr[-600:]}")
+        raise RuntimeError(f"yt-dlp could not read the video metadata: {r.stderr[-1200:]}")
     info = json.loads(r.stdout)
     duration = float(info.get("duration") or 0)
     if info.get("is_live") or info.get("live_status") == "is_live":
@@ -183,19 +183,18 @@ def get_video_metadata(url: str, max_minutes: int) -> dict:
 
 def download_source(url: str, work_dir: Path, max_height: int) -> tuple[str, dict]:
     info = get_video_metadata(url, int(os.getenv("MAX_VIDEO_MINUTES", "180")))
-    # Prefer a video stream at or below MAX_HEIGHT, but always fall back to the
-    # best format yt-dlp can obtain. This avoids hard failures on archived live
-    # streams and videos whose available representations do not match 1080p.
     fmt = f"bv*[height<={max_height}]+ba/b[height<={max_height}]/bv*+ba/b"
     out_tpl = str(work_dir / "source.%(ext)s")
     cmd = yt_dlp_base() + [
-        "-f", fmt, "--no-warnings", "--merge-output-format", "mkv",
+        "-f", fmt, "--merge-output-format", "mkv",
         "--write-info-json", "-o", out_tpl, url,
     ]
     write_status("download", 3, "Descargando video de YouTube", title=info.get("title"))
-    r = subprocess.run(cmd)
+    r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        raise RuntimeError("yt-dlp failed to download the source video.")
+        detail = (r.stderr or r.stdout or "unknown yt-dlp error").strip()
+        detail = detail[-3000:]
+        raise RuntimeError(f"yt-dlp failed to download the source video: {detail}")
     for ext in ("mp4", "mkv", "webm"):
         cand = work_dir / f"source.{ext}"
         if cand.exists():
