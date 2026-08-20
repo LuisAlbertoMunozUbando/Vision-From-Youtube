@@ -12,9 +12,14 @@ export function sparkConfig() {
     throw new Error('SPARK_API_URL/SPARK_API_KEY are not configured');
   }
 
-  // Be forgiving with dashboard input: allow a bare hostname or http:// URL
-  // and normalize remote endpoints to HTTPS. Local development may stay HTTP.
+  // Be forgiving with dashboard input: trim quotes, repair common scheme typos,
+  // allow a bare hostname, and normalize remote endpoints to HTTPS.
   let candidate = rawBase.replace(/^['"]|['"]$/g, '').replace(/\/$/, '');
+  candidate = candidate
+    .replace(/^htts:\/\//i, 'https://')
+    .replace(/^htps:\/\//i, 'https://')
+    .replace(/^httpss:\/\//i, 'https://');
+
   if (!/^https?:\/\//i.test(candidate)) {
     candidate = `https://${candidate}`;
   }
