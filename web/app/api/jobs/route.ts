@@ -1,11 +1,7 @@
-export const runtime = 'nodejs';
+import { fetchErrorMessage, sparkFetch } from '../../../lib/spark';
 
-function config() {
-  const base = process.env.SPARK_API_URL?.replace(/\/$/, '');
-  const key = process.env.SPARK_API_KEY;
-  if (!base || !key) throw new Error('SPARK_API_URL/SPARK_API_KEY are not configured');
-  return { base, key };
-}
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 function errorMessage(payload: any, fallback = 'No fue posible crear el trabajo'): string {
   if (!payload) return fallback;
@@ -29,19 +25,16 @@ function errorMessage(payload: any, fallback = 'No fue posible crear el trabajo'
 
 export async function POST(request: Request) {
   try {
-    const { base, key } = config();
     const body = await request.json();
-    const upstream = await fetch(`${base}/v1/jobs`, {
+    const upstream = await sparkFetch('/v1/jobs', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         youtube_url: body.youtube_url,
         email: body.email,
         newsletter: Boolean(body.newsletter),
       }),
-      signal: AbortSignal.timeout(15_000),
-      cache: 'no-store',
-    });
+    }, 30_000);
 
     const text = await upstream.text();
     let payload: any = null;
@@ -62,7 +55,9 @@ export async function POST(request: Request) {
       status: upstream.status,
       headers: { 'Cache-Control': 'no-store' },
     });
-  } catch (e) {
-    return Response.json({ error: e instanceof Error ? e.message : 'Spark unavailable' }, { status: 502 });
+  } catch (error) {
+    const message = fetchErrorMessage(error);
+    console.error('Spark create-job request failed:', message);
+    return Response.json({ error: message }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
   }
 }
