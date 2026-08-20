@@ -5,24 +5,33 @@ import { setDefaultResultOrder } from 'node:dns';
 setDefaultResultOrder('ipv4first');
 
 export function sparkConfig() {
-  const base = process.env.SPARK_API_URL?.trim().replace(/\/$/, '');
+  const rawBase = process.env.SPARK_API_URL?.trim();
   const key = process.env.SPARK_API_KEY?.trim();
 
-  if (!base || !key) {
+  if (!rawBase || !key) {
     throw new Error('SPARK_API_URL/SPARK_API_KEY are not configured');
+  }
+
+  // Be forgiving with dashboard input: allow a bare hostname or http:// URL
+  // and normalize remote endpoints to HTTPS. Local development may stay HTTP.
+  let candidate = rawBase.replace(/^['"]|['"]$/g, '').replace(/\/$/, '');
+  if (!/^https?:\/\//i.test(candidate)) {
+    candidate = `https://${candidate}`;
   }
 
   let parsed: URL;
   try {
-    parsed = new URL(base);
+    parsed = new URL(candidate);
   } catch {
     throw new Error('SPARK_API_URL is not a valid URL');
   }
 
-  if (parsed.protocol !== 'https:' && parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost') {
-    throw new Error('SPARK_API_URL must use HTTPS');
+  const isLocal = parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost';
+  if (!isLocal && parsed.protocol === 'http:') {
+    parsed.protocol = 'https:';
   }
 
+  const base = parsed.toString().replace(/\/$/, '');
   return { base, key };
 }
 
