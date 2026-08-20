@@ -4,5 +4,5 @@ pydantic>=2.10,<3
 numpy>=2.0,<3
 opencv-python-headless>=4.10,<5
 pillow>=11,<12
-yt-dlp>=2026.1.1
+yt-dlp[default]>=2026.1.1
 vercel>=0.3
