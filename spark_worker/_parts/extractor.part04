@@ -67,11 +67,13 @@ def capture_and_pdf(segments, seg_obj, dt):
             "start_seconds":round(s["t_start"],2),"end_seconds":round(s["t_last"],2),"duration_seconds":round(s["duration"],2),
             "captured_at":fmt_t(best_t),"captured_at_seconds":round(best_t,2),"animation_steps":s["builds"],"sharpness":round(best_s,6),
             "box_fractions":[round(v,4) for v in s["box"]],"crop_pixels":[px0,py0,px1,py1],"size":[px1-px0,py1-py0],
-            "credit":f'© {VIDEO_URL} — "{VIDEO_TITLE}" — t={fmt_t(best_t)}'})
+            "credit":f'© {VIDEO_URL} — "{VIDEO_TITLE}" — t={fmt_t(best_t)}',
+            "high_sensitivity":bool(s.get("high_sensitivity",False)),
+            "changed_fraction":round(float(s.get("changed_fraction",0.0)),4) if s.get("high_sensitivity") else None})
         write_status("pass_c", 76 + 18*((i+1)/total), f"Pass C: capturando slide {i+1}/{total}", slides_detected=len(captures))
     tp,ti=seg_obj.thresholds()
     summary={"source_url":VIDEO_URL,"title":VIDEO_TITLE,"native_resolution":[NATIVE_W,NATIVE_H],"duration_seconds":round(DURATION,1),
-        "analysis":{"fps":ANALYSIS_FPS,"speed":ANALYSIS_SPEED,"resolution":[ANALYSIS_W,ANALYSIS_H],"grid":[GRID_COLS,GRID_ROWS],"static_window_sec":STATIC_WINDOW_SEC,"static_eps":STATIC_EPS,"region_mode":REGION_MODE},
+        "analysis":{"fps":ANALYSIS_FPS,"speed":ANALYSIS_SPEED,"high_sensitivity":HIGH_SENSITIVITY,"resolution":[ANALYSIS_W,ANALYSIS_H],"grid":[GRID_COLS,GRID_ROWS],"static_window_sec":STATIC_WINDOW_SEC,"static_eps":STATIC_EPS,"region_mode":REGION_MODE},
         "thresholds":{"same_diff_learned":round(tp,5),"same_ink_learned":round(ti,5),"dedup_mult":DEDUP_MULT,"min_slide_seconds":MIN_SLIDE_SECONDS * ANALYSIS_SPEED,"min_stable_seconds":MIN_STABLE_SEC * ANALYSIS_SPEED,"min_slide_area":MIN_SLIDE_AREA},
         "num_slides":len(captures),"slides":captures}
     (OUTPUT_DIR/"slides.json").write_text(json.dumps(summary,indent=2,ensure_ascii=False),encoding="utf-8")
@@ -83,19 +85,21 @@ def capture_and_pdf(segments, seg_obj, dt):
 
 
 def main():
-    global SRC, VIDEO_URL, VIDEO_TITLE, NATIVE_W, NATIVE_H, DURATION, MAX_HEIGHT, OUTPUT_DIR, WORK_DIR, STATUS_FILE
+    global SRC, VIDEO_URL, VIDEO_TITLE, NATIVE_W, NATIVE_H, DURATION, MAX_HEIGHT, OUTPUT_DIR, WORK_DIR, STATUS_FILE, HIGH_SENSITIVITY
     ap=argparse.ArgumentParser()
     ap.add_argument("--url",required=True)
     ap.add_argument("--job-dir",required=True)
     ap.add_argument("--status-file",required=True)
     ap.add_argument("--max-height",type=int,default=1080)
     ap.add_argument("--speed",type=float,default=1.0,help="Analysis speed factor (0.25-2.0); 1.0 preserves legacy settings.")
+    ap.add_argument("--high-sensitivity",type=int,choices=(0,1),default=0)
     args=ap.parse_args()
     if not math.isfinite(args.speed) or not 0.25 <= args.speed <= 2.0:
         ap.error("--speed must be between 0.25 and 2.0")
     global ANALYSIS_SPEED, ANALYSIS_FPS
     ANALYSIS_SPEED = args.speed
     ANALYSIS_FPS = 2.0 / ANALYSIS_SPEED
+    HIGH_SENSITIVITY = bool(args.high_sensitivity)
     job_dir=Path(args.job_dir).resolve(); WORK_DIR=job_dir/"work"; OUTPUT_DIR=job_dir/"output"; STATUS_FILE=Path(args.status_file).resolve()
     WORK_DIR.mkdir(parents=True,exist_ok=True); OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
     VIDEO_URL=args.url; MAX_HEIGHT=args.max_height
@@ -107,7 +111,27 @@ def main():
         write_status("probe",10,f"Video listo: {VIDEO_TITLE}",title=VIDEO_TITLE,duration_seconds=DURATION,native_resolution=[NATIVE_W,NATIVE_H])
         choose_decoder(); build_content_mask()
         segments,seg_obj,dt=analyze(); segments,_=enforce_layout(segments)
-        write_status("pass_c",76,f"{len(segments)} slides distintos detectados; capturando a resolución nativa",slides_detected=len(segments))
+        if HIGH_SENSITIVITY:
+            write_status("high_sensitivity",72,"High Sensitivity: buscando imágenes estables durante 4.5 s",slides_detected=len(segments))
+            segments=merge_high_sensitivity_segments(segments, high_sensitivity_candidates())
+        if not segments:
+            # Final safety net: never return an empty extraction. Capture one
+            # representative frame per minute of video.
+            sample_times=list(np.arange(0.0, max(DURATION, 1.0), 60.0))
+            segments=[{
+                "t_start":t,
+                "t_last":min(t+1.0,DURATION),
+                "t_settled":t,
+                "duration":1.0,
+                "n_stable":1,
+                "sig":None,
+                "box":(0.0,0.0,1.0,1.0),
+                "area":1.0,
+                "builds":0,
+                "fallback":True,
+            } for t in sample_times]
+            write_status("fallback",74,f"Sin slides detectados: usando respaldo de 1 captura por minuto ({len(segments)} imágenes)",slides_detected=len(segments))
+        write_status("pass_c",76,f"{len(segments)} slides/imágenes seleccionados; capturando a resolución nativa",slides_detected=len(segments))
         pdf,summary=capture_and_pdf(segments,seg_obj,dt)
         write_status("complete_local",95,"PDF generado localmente",slides_detected=summary["num_slides"],pdf_path=str(pdf),title=VIDEO_TITLE)
         print(json.dumps({"pdf_path":str(pdf),"slides_json":str(OUTPUT_DIR/"slides.json"),"num_slides":summary["num_slides"],"title":VIDEO_TITLE},ensure_ascii=False))

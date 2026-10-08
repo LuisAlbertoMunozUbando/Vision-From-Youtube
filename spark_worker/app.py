@@ -42,6 +42,7 @@ class JobRequest(BaseModel):
     email: str = Field(min_length=5, max_length=254)
     newsletter: bool = False
     speed: float = Field(default=1.0, ge=0.25, le=2.0)
+    high_sensitivity: bool = False
 
 
 class JobResponse(BaseModel):
@@ -185,6 +186,7 @@ def run_job(job_id: str):
         "--status-file", str(extractor_status_path(job_id)),
         "--max-height", str(MAX_HEIGHT),
         "--speed", str(state.get("speed", 1.0)),
+        "--high-sensitivity", "1" if state.get("high_sensitivity", False) else "0",
     ]
     env = os.environ.copy()
     try:
@@ -296,6 +298,7 @@ def create_job(req: JobRequest):
         "email": email,
         "newsletter": False,
         "speed": req.speed,
+        "high_sensitivity": req.high_sensitivity,
         "status": "queued",
         "progress": 0,
         "stage": "queued",
