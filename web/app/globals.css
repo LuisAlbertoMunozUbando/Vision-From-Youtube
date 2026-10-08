@@ -46,3 +46,6 @@ small { display:block; color:var(--muted); margin-top:10px; line-height:1.45; }
 footer { border-top:1px solid #1d2733; padding:22px 0 30px; color:#7f8b99; font-size:13px; display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; }
 .footerTag { color:#667383; }
 @media (max-width:720px) { .hero{padding-top:22px}.topbar{margin-bottom:48px}.features{grid-template-columns:1fr}.statusHeader{align-items:center}.downloadRow{flex-direction:column}.download{width:100%}footer{flex-direction:column}.brandMark{font-size:10px} }
+
+input[type="range"] { width:100%; accent-color:var(--accent); cursor:pointer; margin:8px 0 0; }
+input[type="range"]:focus-visible { outline:2px solid var(--accent); outline-offset:5px; }

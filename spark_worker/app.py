@@ -41,6 +41,7 @@ class JobRequest(BaseModel):
     youtube_url: str = Field(min_length=10, max_length=500)
     email: str = Field(min_length=5, max_length=254)
     newsletter: bool = False
+    speed: float = Field(default=1.0, ge=0.25, le=2.0)
 
 
 class JobResponse(BaseModel):
@@ -183,6 +184,7 @@ def run_job(job_id: str):
         "--job-dir", str(jd),
         "--status-file", str(extractor_status_path(job_id)),
         "--max-height", str(MAX_HEIGHT),
+        "--speed", str(state.get("speed", 1.0)),
     ]
     env = os.environ.copy()
     try:
@@ -293,6 +295,7 @@ def create_job(req: JobRequest):
         "youtube_url": url,
         "email": email,
         "newsletter": False,
+        "speed": req.speed,
         "status": "queued",
         "progress": 0,
         "stage": "queued",
