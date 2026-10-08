@@ -8,7 +8,7 @@ type Lang = 'en'|'es';
 const text = {
   en: {
     lede:'Paste the link to a public YouTube talk. The NVIDIA DGX Spark detects presentation slides, removes repetitions, keeps the most complete animation state, and generates a PDF with provenance and timestamps.',
-    yt:'YouTube link', email:'Email to identify your PDF', send:'Extract slides', sending:'Submitting…',
+    yt:'YouTube link', speed:'Analysis speed', speedHelp:'1× = standard analysis; 0.5× = denser sampling and shorter slide exposure requirements; 2× = faster, less sensitive analysis.', email:'Email to identify your PDF', send:'Extract slides', sending:'Submitting…',
     note:'Your email is used only to identify and name the PDF. No email is sent.', process:'Processing video', queue:'Queued', slides:'slides detected.',
     ready:'PDF ready', download:'Download PDF', drive:'Open Google Drive copy', delivery:'We try to start the download automatically. If your browser blocks it, click “Download PDF”.',
     gpu:'Local GPU', gpuText:'NVDEC + PyTorch/CUDA on the DGX Spark.', llm:'No LLM', llmText:'Deterministic visual detection with no AI-token consumption.',
@@ -17,7 +17,7 @@ const text = {
   },
   es: {
     lede:'Pega el enlace de una charla pública de YouTube. La NVIDIA DGX Spark detecta las diapositivas, elimina repeticiones, conserva la versión más completa de las animaciones y genera un PDF con procedencia y timestamps.',
-    yt:'Enlace de YouTube', email:'Email para identificar tu PDF', send:'Extraer slides', sending:'Enviando…',
+    yt:'Enlace de YouTube', speed:'Velocidad de análisis', speedHelp:'1× = análisis normal; 0.5× = más muestreo y menor tiempo de exposición exigido; 2× = análisis más rápido y menos sensible.', email:'Email para identificar tu PDF', send:'Extraer slides', sending:'Enviando…',
     note:'El email se usa únicamente para identificar y nombrar tu PDF. No se envía correo.', process:'Procesando video', queue:'En cola', slides:'slides detectados.',
     ready:'PDF listo', download:'Descargar PDF', drive:'Abrir copia en Google Drive', delivery:'Intentamos iniciar la descarga automáticamente. Si el navegador la bloquea, pulsa “Descargar PDF”.',
     gpu:'GPU local', gpuText:'NVDEC + PyTorch/CUDA en la DGX Spark.', llm:'Sin LLM', llmText:'Detección visual determinista, sin consumo de tokens de IA.',
@@ -42,6 +42,7 @@ const statusText = {
 export default function Home() {
   const [url,setUrl] = useState('');
   const [email,setEmail] = useState('');
+  const [speed,setSpeed] = useState(1);
   const [job,setJob] = useState<Job|null>(null);
   const [busy,setBusy] = useState(false);
   const [error,setError] = useState('');
@@ -63,7 +64,7 @@ export default function Home() {
   async function submit(e:FormEvent) {
     e.preventDefault(); setError(''); setBusy(true); setJob(null); downloadedJob.current=null;
     try {
-      const r = await fetch('/api/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({youtube_url:url.trim(),email:email.trim()})});
+      const r = await fetch('/api/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({youtube_url:url.trim(),email:email.trim(),speed})});
       const body = await r.json();
       if (!r.ok) throw new Error(readableError(body,t.createError));
       setJob(body);
@@ -108,6 +109,9 @@ export default function Home() {
       <form onSubmit={submit} className="card form">
         <label htmlFor="youtube">{t.yt}</label>
         <input id="youtube" type="url" inputMode="url" placeholder="https://www.youtube.com/watch?v=..." value={url} onChange={e=>setUrl(e.target.value)} required/>
+        <label htmlFor="speed" className="fieldLabel">{t.speed}: <strong>{speed.toFixed(2).replace(/\.00$/, '')}×</strong></label>
+        <input id="speed" type="range" min="0.25" max="2" step="0.25" value={speed} onChange={e=>setSpeed(Number(e.target.value))} aria-valuetext={`${speed}×`}/>
+        <small>{t.speedHelp}</small>
         <label htmlFor="email" className="fieldLabel">{t.email}</label>
         <input id="email" type="email" inputMode="email" placeholder={lang==='en'?'name@university.edu':'nombre@universidad.edu'} value={email} onChange={e=>setEmail(e.target.value)} required/>
         <button className="submitButton" disabled={busy||!url.trim()||!email.trim()}>{busy?t.sending:t.send}</button>
