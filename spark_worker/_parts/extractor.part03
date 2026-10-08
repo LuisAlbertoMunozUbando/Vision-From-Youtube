@@ -154,12 +154,12 @@ def analyze():
 # Optional High Sensitivity pass
 # ---------------------------------------------------------------------------
 def high_sensitivity_candidates():
-    """Find visually stable frames even when the normal slide detector misses them.
+    """Find stable image windows missed by the normal slide detector.
 
-    A candidate is emitted when no more than 10% of significantly-changing
-    pixels are observed over a 4.5 second window. The comparison uses the
-    analysis-resolution grayscale frame and PIX_EPS as the per-pixel
-    significance threshold.
+    High Sensitivity accepts a candidate when, throughout a 4.5 second rolling
+    window, no sampled frame differs from the first frame by more than 10% of
+    significant pixels. Windows are evaluated about once per second. Processing
+    is streaming, so memory use stays bounded for long videos.
     """
     if not HIGH_SENSITIVITY:
         return []
@@ -167,48 +167,59 @@ def high_sensitivity_candidates():
     window_sec = 4.5
     max_changed_fraction = 0.10
     fps = max(1.0, ANALYSIS_FPS)
-    step_frames = max(1, int(round(window_sec * fps)))
+    window_frames = max(2, int(round(window_sec * fps)) + 1)
+    eval_stride = max(1, int(round(fps)))  # evaluate about once per second
+    frames = deque(maxlen=window_frames)
+    times = deque(maxlen=window_frames)
+    out = []
+    last_kept_t = -1e9
+    frame_index = 0
+
     rd = GrayReader(SRC, ANALYSIS_W, ANALYSIS_H, fps=fps)
-    frames = []
     try:
         while True:
-            b = rd.read_batch(BATCH_FRAMES)
-            if b is None:
+            batch = rd.read_batch(BATCH_FRAMES)
+            if batch is None:
                 break
-            frames.append(b)
+            for frame in batch:
+                t = frame_index / fps
+                frames.append(np.ascontiguousarray(frame))
+                times.append(t)
+                frame_index += 1
+
+                if len(frames) < window_frames or frame_index % eval_stride != 0:
+                    continue
+
+                ref = frames[0].astype(np.int16)
+                worst = 0.0
+                for current in list(frames)[1:]:
+                    changed = float((np.abs(current.astype(np.int16) - ref) > int(round(255 * PIX_EPS))).mean())
+                    worst = max(worst, changed)
+                    if worst > max_changed_fraction:
+                        break
+
+                if worst <= max_changed_fraction:
+                    t0 = times[0]
+                    t1 = times[-1]
+                    if t0 - last_kept_t >= window_sec:
+                        mid = 0.5 * (t0 + t1)
+                        out.append({
+                            "t_start": t0,
+                            "t_last": t1,
+                            "t_settled": mid,
+                            "duration": max(t1 - t0, 0.0),
+                            "n_stable": len(frames),
+                            "sig": None,
+                            "box": (0.0, 0.0, 1.0, 1.0),
+                            "area": 1.0,
+                            "builds": 0,
+                            "high_sensitivity": True,
+                            "changed_fraction": worst,
+                        })
+                        last_kept_t = t0
     finally:
         rd.close()
 
-    if not frames:
-        return []
-
-    a = np.concatenate(frames, 0)
-    out = []
-    last_kept_t = -1e9
-    # Compare the first and last frame of each 4.5 s window.
-    for i in range(0, max(0, len(a) - step_frames), step_frames):
-        j = min(i + step_frames, len(a) - 1)
-        f0 = a[i].astype(np.float32) / 255.0
-        f1 = a[j].astype(np.float32) / 255.0
-        changed = float((np.abs(f1 - f0) > PIX_EPS).mean())
-        t0 = i / fps
-        t1 = j / fps
-        if changed <= max_changed_fraction and t0 - last_kept_t >= window_sec:
-            mid = (t0 + t1) / 2.0
-            out.append({
-                "t_start": t0,
-                "t_last": t1,
-                "t_settled": mid,
-                "duration": max(t1 - t0, 0.0),
-                "n_stable": step_frames,
-                "sig": f1,
-                "box": (0.0, 0.0, 1.0, 1.0),
-                "area": 1.0,
-                "builds": 0,
-                "high_sensitivity": True,
-                "changed_fraction": changed,
-            })
-            last_kept_t = t0
     return out
 
 
