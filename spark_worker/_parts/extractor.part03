@@ -148,6 +148,9 @@ def analyze():
                 i += 1
             pct = 20 + 55 * min(i / expected, 1.0)
             write_status("pass_b", pct, f"Pass B: analizando {fmt_t(i*DT)} / {fmt_t(DURATION)}", slides_detected=len(seg.segments))
+    finally:
+        rd.close()
+    return seg.finish(), seg, DT
 
 
 # ---------------------------------------------------------------------------
