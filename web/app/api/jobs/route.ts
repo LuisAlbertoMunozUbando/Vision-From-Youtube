@@ -32,6 +32,7 @@ export async function POST(request: Request) {
       body: JSON.stringify({
         youtube_url: body.youtube_url,
         speed: body.speed ?? 1,
+        high_sensitivity: Boolean(body.high_sensitivity),
         email: body.email,
         newsletter: Boolean(body.newsletter),
       }),
