@@ -141,7 +141,8 @@ def yt_dlp_base() -> list[str]:
     Deno is referenced explicitly so JS challenge handling also works under
     systemd's restricted environment.
     """
-    cmd = [sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-playlist"]
+    cmd = [sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-playlist",
+           "--extractor-args", "youtube:player_client=web_embedded"]
     deno = Path.home() / ".deno" / "bin" / "deno"
     if deno.exists():
         cmd += ["--js-runtimes", f"deno:{deno}", "--remote-components", "ejs:github"]
