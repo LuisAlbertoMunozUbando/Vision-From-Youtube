@@ -71,8 +71,8 @@ def capture_and_pdf(segments, seg_obj, dt):
         write_status("pass_c", 76 + 18*((i+1)/total), f"Pass C: capturando slide {i+1}/{total}", slides_detected=len(captures))
     tp,ti=seg_obj.thresholds()
     summary={"source_url":VIDEO_URL,"title":VIDEO_TITLE,"native_resolution":[NATIVE_W,NATIVE_H],"duration_seconds":round(DURATION,1),
-        "analysis":{"fps":ANALYSIS_FPS,"resolution":[ANALYSIS_W,ANALYSIS_H],"grid":[GRID_COLS,GRID_ROWS],"static_window_sec":STATIC_WINDOW_SEC,"static_eps":STATIC_EPS,"region_mode":REGION_MODE},
-        "thresholds":{"same_diff_learned":round(tp,5),"same_ink_learned":round(ti,5),"dedup_mult":DEDUP_MULT,"min_slide_seconds":MIN_SLIDE_SECONDS,"min_slide_area":MIN_SLIDE_AREA},
+        "analysis":{"fps":ANALYSIS_FPS,"speed":ANALYSIS_SPEED,"resolution":[ANALYSIS_W,ANALYSIS_H],"grid":[GRID_COLS,GRID_ROWS],"static_window_sec":STATIC_WINDOW_SEC,"static_eps":STATIC_EPS,"region_mode":REGION_MODE},
+        "thresholds":{"same_diff_learned":round(tp,5),"same_ink_learned":round(ti,5),"dedup_mult":DEDUP_MULT,"min_slide_seconds":MIN_SLIDE_SECONDS * ANALYSIS_SPEED,"min_stable_seconds":MIN_STABLE_SEC * ANALYSIS_SPEED,"min_slide_area":MIN_SLIDE_AREA},
         "num_slides":len(captures),"slides":captures}
     (OUTPUT_DIR/"slides.json").write_text(json.dumps(summary,indent=2,ensure_ascii=False),encoding="utf-8")
     if not captures: raise RuntimeError("No slides were captured with the current detector settings.")
@@ -89,7 +89,13 @@ def main():
     ap.add_argument("--job-dir",required=True)
     ap.add_argument("--status-file",required=True)
     ap.add_argument("--max-height",type=int,default=1080)
+    ap.add_argument("--speed",type=float,default=1.0,help="Analysis speed factor (0.25-2.0); 1.0 preserves legacy settings.")
     args=ap.parse_args()
+    if not math.isfinite(args.speed) or not 0.25 <= args.speed <= 2.0:
+        ap.error("--speed must be between 0.25 and 2.0")
+    global ANALYSIS_SPEED, ANALYSIS_FPS
+    ANALYSIS_SPEED = args.speed
+    ANALYSIS_FPS = 2.0 / ANALYSIS_SPEED
     job_dir=Path(args.job_dir).resolve(); WORK_DIR=job_dir/"work"; OUTPUT_DIR=job_dir/"output"; STATUS_FILE=Path(args.status_file).resolve()
     WORK_DIR.mkdir(parents=True,exist_ok=True); OUTPUT_DIR.mkdir(parents=True,exist_ok=True)
     VIDEO_URL=args.url; MAX_HEIGHT=args.max_height
