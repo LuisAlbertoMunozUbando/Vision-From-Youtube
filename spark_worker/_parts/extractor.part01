@@ -34,6 +34,7 @@ from PIL import Image, ImageDraw, ImageFont
 # Configuration: defaults are taken from the supplied notebook.
 # ---------------------------------------------------------------------------
 ANALYSIS_FPS = 2.0
+ANALYSIS_SPEED = 1.0
 ANALYSIS_W = 640
 ANALYSIS_H = 360
 BATCH_FRAMES = 64
