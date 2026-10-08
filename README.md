@@ -71,10 +71,11 @@ flowchart LR
 
 1. Choose **EN** or **ES**; the preference is remembered locally.
 2. Paste a public YouTube URL.
-3. Enter an email address used only as the PDF identifier/name.
-4. Follow extraction progress in the browser.
-5. When the PDF exists, the job becomes `done` and the browser enables download immediately.
-6. The system archives a secondary copy in Google Drive without blocking delivery.
+3. Set **Analysis speed** between **0.25× and 2×** (default **1×**). A lower factor samples more frames of the original video and reduces the minimum slide visibility threshold; this does **not** change the original video's timestamps or remux/playback speed. For fast-changing slides, try **0.5×** or **0.25×**. A higher factor trades detection sensitivity for faster processing.
+4. Enter an email address used only as the PDF identifier/name.
+5. Follow extraction progress in the browser.
+6. When the PDF exists, the job becomes `done` and the browser enables download immediately.
+7. The system archives a secondary copy in Google Drive without blocking delivery.
 
 ## Extraction pipeline
 
