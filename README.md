@@ -72,10 +72,11 @@ flowchart LR
 1. Choose **EN** or **ES**; the preference is remembered locally.
 2. Paste a public YouTube URL.
 3. Set **Analysis speed** between **0.25× and 2×** (default **1×**). A lower factor samples more frames of the original video and reduces the minimum slide visibility threshold; this does **not** change the original video's timestamps or remux/playback speed. For fast-changing slides, try **0.5×** or **0.25×**. A higher factor trades detection sensitivity for faster processing.
-4. Enter an email address used only as the PDF identifier/name.
-5. Follow extraction progress in the browser.
-6. When the PDF exists, the job becomes `done` and the browser enables download immediately.
-7. The system archives a secondary copy in Google Drive without blocking delivery.
+4. Optionally enable **High Sensitivity**. In this mode, an additional candidate is kept when the image changes by no more than about **10%** across a **4.5-second** window, then near-time duplicates are removed.
+5. Enter an email address used only as the PDF identifier/name.
+6. Follow extraction progress in the browser.
+7. When the PDF exists, the job becomes `done` and the browser enables download immediately.
+8. The system archives a secondary copy in Google Drive without blocking delivery.
 
 ## Extraction pipeline
 
@@ -95,6 +96,8 @@ Conceptually the extractor operates in three stages:
 - **Pass A — content analysis:** keyframe/content analysis and noise filtering.
 - **Pass B — GPU segmentation:** reduced-rate slide-state segmentation using hardware decoding and CUDA-assisted analysis.
 - **Pass C — final capture:** native-resolution seek, sharpest-frame selection, provenance/timestamp stamping and PDF rendering.
+- **High Sensitivity (optional):** adds visually stable windows where no more than ~10% of significant pixels change across 4.5 seconds.
+- **Empty-result fallback:** if no slide is selected by any detector, the extractor returns one full-frame capture every 60 seconds instead of failing.
 
 ## Repository map
 
