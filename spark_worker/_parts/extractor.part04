@@ -114,23 +114,31 @@ def main():
         if HIGH_SENSITIVITY:
             write_status("high_sensitivity",72,"High Sensitivity: buscando imágenes estables durante 4.5 s",slides_detected=len(segments))
             segments=merge_high_sensitivity_segments(segments, high_sensitivity_candidates())
-        if not segments:
-            # Final safety net: never return an empty extraction. Capture one
-            # representative frame per minute of video.
+        if len(segments) < 3:
+            # Coverage fallback: preserve any detected slides, then add one
+            # representative full-frame capture per minute of video. Skip a
+            # minute sample when it lands within 10 s of an already selected
+            # slide to avoid obvious duplicates.
             sample_times=list(np.arange(0.0, max(DURATION, 1.0), 60.0))
-            segments=[{
-                "t_start":t,
-                "t_last":min(t+1.0,DURATION),
-                "t_settled":t,
-                "duration":1.0,
-                "n_stable":1,
-                "sig":None,
-                "box":(0.0,0.0,1.0,1.0),
-                "area":1.0,
-                "builds":0,
-                "fallback":True,
-            } for t in sample_times]
-            write_status("fallback",74,f"Sin slides detectados: usando respaldo de 1 captura por minuto ({len(segments)} imágenes)",slides_detected=len(segments))
+            existing=list(segments)
+            for t in sample_times:
+                center=t
+                if any(abs(center - 0.5*(s["t_start"]+s["t_last"])) < 10.0 for s in existing):
+                    continue
+                existing.append({
+                    "t_start":t,
+                    "t_last":min(t+1.0,DURATION),
+                    "t_settled":t,
+                    "duration":1.0,
+                    "n_stable":1,
+                    "sig":None,
+                    "box":(0.0,0.0,1.0,1.0),
+                    "area":1.0,
+                    "builds":0,
+                    "fallback":True,
+                })
+            segments=sorted(existing,key=lambda s:s["t_start"])
+            write_status("fallback",74,f"Menos de 3 slides detectados: completando con 1 captura por minuto ({len(segments)} imágenes)",slides_detected=len(segments))
         write_status("pass_c",76,f"{len(segments)} slides/imágenes seleccionados; capturando a resolución nativa",slides_detected=len(segments))
         pdf,summary=capture_and_pdf(segments,seg_obj,dt)
         write_status("complete_local",95,"PDF generado localmente",slides_detected=summary["num_slides"],pdf_path=str(pdf),title=VIDEO_TITLE)

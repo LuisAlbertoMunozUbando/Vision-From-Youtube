@@ -97,7 +97,7 @@ Conceptually the extractor operates in three stages:
 - **Pass B — GPU segmentation:** reduced-rate slide-state segmentation using hardware decoding and CUDA-assisted analysis.
 - **Pass C — final capture:** native-resolution seek, sharpest-frame selection, provenance/timestamp stamping and PDF rendering.
 - **High Sensitivity (optional):** adds visually stable windows where no more than ~10% of significant pixels change across 4.5 seconds.
-- **Empty-result fallback:** if no slide is selected by any detector, the extractor returns one full-frame capture every 60 seconds instead of failing.
+- **Low-detection fallback:** if fewer than 3 slides are selected, the extractor preserves them and supplements the result with one full-frame capture every 60 seconds, skipping samples that fall very close to an already selected slide.
 
 ## Repository map
 
