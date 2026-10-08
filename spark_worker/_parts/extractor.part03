@@ -121,7 +121,7 @@ def enforce_layout(segments):
 
 
 def analyze():
-    K_WIN = max(2, int(round(STATIC_WINDOW_SEC * ANALYSIS_FPS)) + 1)
+    K_WIN = max(2, int(round(STATIC_WINDOW_SEC * ANALYSIS_SPEED * ANALYSIS_FPS)) + 1)
     DT = 1.0 / ANALYSIS_FPS
     rd = GrayReader(SRC, ANALYSIS_W, ANALYSIS_H, fps=ANALYSIS_FPS)
     seg = SlideSegmenter(DT)
